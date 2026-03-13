@@ -45,6 +45,21 @@
           </button>
         </article>
 
+        <article class="user-status-card sync-status-card">
+          <span class="label">共有保存の状態</span>
+          <strong id="syncModeLabel">この端末だけ</strong>
+          <p id="syncStatusMessage" class="helper-text">
+            共有設定を保存すると、2台で同じ物件一覧を見られます。
+          </p>
+          <div class="sync-meta">
+            <span id="syncWorkspaceLabel" class="chip chip-site">workspace: ローカルのみ</span>
+            <span id="syncLastSynced" class="helper-text">最終同期: まだ未接続</span>
+          </div>
+          <button type="button" id="manualSyncButton" class="secondary-button">
+            今すぐ同期
+          </button>
+        </article>
+
         <button type="button" id="openPropertyFormButton" class="primary-button">
           物件を追加
         </button>
@@ -526,23 +541,65 @@
         </p>
 
         <form id="settingsForm" class="settings-form">
-          <label class="user-choice-card">
-            <input type="radio" name="currentUser" value="keiichi">
-            <span class="user-choice-swatch user-choice-swatch-keiichi"></span>
-            <span class="user-choice-text">
-              <strong>けいいち</strong>
-              <small>現在の自分のレビューを「けいいち側」に保存します。</small>
-            </span>
-          </label>
+          <section class="settings-block">
+            <div class="section-line">
+              <h3>現在の利用者</h3>
+            </div>
 
-          <label class="user-choice-card">
-            <input type="radio" name="currentUser" value="honoka">
-            <span class="user-choice-swatch user-choice-swatch-honoka"></span>
-            <span class="user-choice-text">
-              <strong>ほのか</strong>
-              <small>現在の自分のレビューを「ほのか側」に保存します。</small>
-            </span>
-          </label>
+            <label class="user-choice-card">
+              <input type="radio" name="currentUser" value="keiichi">
+              <span class="user-choice-swatch user-choice-swatch-keiichi"></span>
+              <span class="user-choice-text">
+                <strong>けいいち</strong>
+                <small>現在の自分のレビューを「けいいち側」に保存します。</small>
+              </span>
+            </label>
+
+            <label class="user-choice-card">
+              <input type="radio" name="currentUser" value="honoka">
+              <span class="user-choice-swatch user-choice-swatch-honoka"></span>
+              <span class="user-choice-text">
+                <strong>ほのか</strong>
+                <small>現在の自分のレビューを「ほのか側」に保存します。</small>
+              </span>
+            </label>
+          </section>
+
+          <section class="settings-block">
+            <div class="section-line">
+              <h3>共有ワークスペース</h3>
+            </div>
+            <p class="helper-text">
+              同じワークスペース名と合言葉を 2 台に保存すると、物件一覧を共有できます。合言葉を空欄で保存すると、この端末だけの保存に戻ります。
+            </p>
+
+            <div class="form-grid compact-grid">
+              <label class="field span-2">
+                <span>ワークスペース名</span>
+                <input
+                  id="sharedWorkspaceInput"
+                  type="text"
+                  placeholder="keiichi-honoka-main"
+                  autocapitalize="off"
+                  autocomplete="off"
+                >
+              </label>
+
+              <label class="field span-2">
+                <span>共有の合言葉</span>
+                <input
+                  id="sharedPassphraseInput"
+                  type="password"
+                  placeholder="2人だけが分かる言葉"
+                  autocomplete="current-password"
+                >
+              </label>
+            </div>
+
+            <p id="settingsSyncStatus" class="helper-text">
+              共有を使うときは、2台とも同じワークスペース名と合言葉を保存してください。
+            </p>
+          </section>
 
           <div class="button-row end">
             <button type="button" id="closeSettingsButton" class="secondary-button">閉じる</button>

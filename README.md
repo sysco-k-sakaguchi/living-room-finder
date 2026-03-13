@@ -2,45 +2,54 @@
 
 けいいちさん / ほのかさんの 2 人で、同棲候補の物件を共有・比較するための Web アプリです。
 
-見た目の画面は `HTML / CSS / JavaScript` だけで作っています。  
-ただし、`SUUMO / HOME'S の URL を自動で読んで項目を補助入力する機能` だけは、`Vercel Function` を使います。
-
-つまり今の構成は、次の 2 層です。
+このアプリは次の 2 つを組み合わせています。
 
 - フロント
   - `index.html`
   - `style.css`
   - `app.js`
-- サーバー側の小さな API
+- Vercel の API
   - `api/import-property.js`
+  - `api/shared-properties.js`
 
-## できること
+画面は HTML / CSS / JavaScript で動きます。  
+ただし、次の 2 機能だけは Vercel の API が必要です。
 
-- 利用者を `けいいち` / `ほのか` から選択して localStorage に保存
-- 物件の追加、編集、削除
-- 物件一覧のカード表示
-- 物件詳細モーダル
-- 2 人それぞれのレビュー管理
-- 並び替え
-  - 新しい順
-  - 家賃が安い順
-  - 家賃が高い順
-  - 徒歩が短い順
-  - 評価が高い順
-- 絞り込み
-  - 追加者
-  - サイト種別
-  - ランク
-  - 家賃上限
-  - 徒歩上限
-  - フリーワード検索
-- 地図表示
-  - 緯度 / 経度が入っている物件だけ地図に表示
-- 初回起動時のサンプルデータ投入
-- Vercel 上での URL 自動読込
-  - SUUMO / HOME'S の URL 判定
-  - サーバー側で HTML を取得して、家賃 / 間取り / 面積 / 駅 / 徒歩 / 住所 / 築年数などを補助入力
-  - 失敗時も URL を保持したまま手入力にフォールバック
+- SUUMO / HOME'S の URL 自動読込
+- 2 台で同じ物件リストを共有する機能
+
+## 今回できるようになったこと
+
+- 物件一覧の共有
+  - 同じ `ワークスペース名` と `合言葉` を設定した 2 台で、同じ物件リストを見られます
+- 利用者の切り替え
+  - `けいいち` / `ほのか` は端末ごとに切り替えます
+- URL 自動読込
+  - Vercel 上では SUUMO / HOME'S の URL から補助入力を試せます
+- 手入力フォールバック
+  - 自動読込に失敗しても、そのまま手入力で登録できます
+
+## 共有の仕組み
+
+### 共有されるもの
+
+- 物件一覧
+- 物件の基本情報
+- 共通メモ
+- 2 人分のレビュー
+
+### 共有されないもの
+
+- 「現在どちらとして操作しているか」の設定
+- 共有ワークスペース名 / 合言葉の入力状態
+
+これらはブラウザの localStorage に保存されます。  
+つまり、
+
+- `けいいち` / `ほのか` の選択は端末ごと
+- 物件リストは共通
+
+という役割分担です。
 
 ## ファイル構成
 
@@ -49,11 +58,15 @@
 - `style.css`
   - レイアウト、カード、モーダル、レスポンシブ対応の CSS
 - `app.js`
-  - localStorage、一覧表示、詳細、追加編集、レビュー、フィルタ、地図、URL読込 UI の処理
+  - 一覧表示、詳細、追加編集、レビュー、共有同期、URL読込 UI の処理
 - `api/import-property.js`
-  - Vercel 上で動く URL 自動読込 API
+  - SUUMO / HOME'S の URL を Vercel 側で取得して補助入力する API
+- `api/shared-properties.js`
+  - Supabase に保存した共有ワークスペースを読み書きする API
 - `package.json`
   - Vercel Function で使う依存ライブラリの設定
+- `supabase-shared-workspace.sql`
+  - Supabase に共有用テーブルを作る SQL
 - `README.md`
   - 使い方と制約の説明
 
@@ -64,120 +77,153 @@
 ### 1. GitHub Pages
 
 - 画面は表示できる
-- 手入力の追加 / 編集 / 保存 / レビュー / 地図は使える
+- localStorage による端末内保存は使える
 - `api/import-property.js` は動かない
-- そのため URL 自動読込は使えず、手入力フォールバック中心になる
+- `api/shared-properties.js` も動かない
+- そのため URL 自動読込と共有機能は使えない
 
 ### 2. Vercel
 
 - 画面も表示できる
-- `api/import-property.js` も動く
-- URL 自動読込を試せる
+- URL 自動読込 API が動く
+- 共有保存 API も動く
 
-`URL 自動読込を使いたいなら、Vercel 側の URL を使う` のが基本です。
+つまり、
 
-## セットアップ手順
+- GitHub Pages = 見た目確認 / ローカル保存向け
+- Vercel = 実運用向け
 
-### 画面だけをローカルで確認する方法
+です。
 
-1. このフォルダを開きます
-2. ターミナルで次を実行します
+## 共有機能を動かすための準備
+
+共有機能は `Supabase` を保存先として使います。  
+Vercel の API が Supabase に接続し、その結果をアプリへ返します。
+
+### 手順 1. Supabase プロジェクトを作る
+
+1. Supabase にログインします
+2. 新しい project を作ります
+3. project ができたら、`Project URL` を確認します
+4. `service_role` キーを確認します
+
+### 手順 2. テーブルを作る
+
+Supabase の SQL Editor を開いて、[supabase-shared-workspace.sql](/Users/K/living-room-finder/supabase-shared-workspace.sql) の内容を実行してください。
+
+この SQL は、共有ワークスペースを 1 行ずつ保存するためのテーブルを作ります。
+
+### 手順 3. Vercel に環境変数を設定する
+
+Vercel のプロジェクト画面で、次の環境変数を設定します。
+
+- `SUPABASE_URL`
+  - Supabase の Project URL
+- `SUPABASE_SERVICE_ROLE_KEY`
+  - Supabase の service_role キー
+
+必要なら次も使えます。
+
+- `SUPABASE_SHARED_TABLE`
+  - 共有テーブル名を変えたい場合だけ設定
+  - 未設定なら `shared_workspaces`
+
+### 手順 4. Vercel を再デプロイする
+
+環境変数を入れたあとに再デプロイすると、共有 API が動くようになります。
+
+## 実際の共有の使い方
+
+1. Vercel の URL を開きます
+2. `設定` を開きます
+3. `現在の利用者` を選びます
+4. `共有ワークスペース` の
+   - ワークスペース名
+   - 合言葉
+   を入力します
+5. もう片方の端末でも、同じ内容を入力します
+6. 両方で保存すると、同じ物件一覧を共有できます
+
+### 使い方のコツ
+
+- 最初の 1 台目が保存したとき、共有ワークスペースが自動作成されます
+- 2 台目は同じワークスペース名と合言葉で接続します
+- 以後は、保存時に共有データへ反映されます
+- 右上の `今すぐ同期` で手動更新もできます
+
+## ローカルでの確認方法
+
+### 画面だけを確認する方法
 
 ```bash
 cd /Users/K/living-room-finder
 python3 -m http.server 8000
 ```
 
-3. ブラウザで `http://localhost:8000` を開きます
+その後、ブラウザで `http://localhost:8000` を開きます。
 
-この方法だと、画面・保存・一覧・レビュー・地図は確認できます。  
-ただし URL 自動読込 API は動きません。
+この方法で確認できるもの:
 
-### URL 自動読込まで含めて確認する方法
+- 画面レイアウト
+- localStorage 保存
+- 物件追加 / 編集 / 削除
+- レビュー
+- 地図
 
-一番簡単なのは、`Vercel に公開した URL` をそのまま使う方法です。
+この方法で確認できないもの:
 
-このプロジェクトは Vercel に公開済みなら、`https://...vercel.app` の URL から自動読込を試せます。
+- URL 自動読込 API
+- 共有保存 API
 
-ローカルで API まで完全に確認したい場合は、別途 Node.js と Vercel CLI が必要です。  
-初心者のうちは、まず `Vercel の公開URLで確認する運用` がおすすめです。
+### 実運用に近い確認方法
 
-## ローカルでの確認ポイント
+一番簡単なのは、`Vercel の公開 URL` をそのまま使う方法です。
 
-最低限、次を確認すると全体が追いやすいです。
+## 保存仕様
 
-1. 初回表示でサンプル物件が出ること
-2. 設定から `けいいち` / `ほのか` を切り替えられること
-3. 物件を手入力で追加できること
-4. 詳細画面からレビューを更新できること
-5. 編集・削除が反映されること
-6. 並び替えと絞り込みが効くこと
-7. 緯度 / 経度がある物件だけ地図に出ること
-8. Vercel URL では `URLから読込を試す` が動くこと
-
-## Vercel 公開手順
-
-1. GitHub リポジトリを用意します
-2. Vercel に GitHub アカウントでログインします
-3. `Import Project` からこのリポジトリを選びます
-4. 最初はそのまま `Deploy` します
-5. 以後は GitHub の更新に合わせて自動再デプロイされます
-
-### Vercel で大事なポイント
-
-- `api/import-property.js` は Vercel 上で API として動きます
-- `package.json` にある `cheerio` は、Vercel がデプロイ時にインストールします
-- そのため、URL 自動読込は `vercel.app` 側で使うのが前提です
-
-## GitHub Pages 公開手順
-
-1. このフォルダの内容を GitHub リポジトリに push します
-2. GitHub のリポジトリ画面で `Settings` を開きます
-3. `Pages` を開きます
-4. `Build and deployment` の `Source` で `Deploy from a branch` を選びます
-5. branch と `/ (root)` を選びます
-6. 保存後、数分待つと公開 URL が発行されます
-
-### GitHub Pages での注意
-
-- GitHub Pages では `api/import-property.js` は動きません
-- そのため URL 自動読込は失敗しやすく、手入力フォールバック前提です
-- 見た目の確認や手入力中心の利用には向いています
-
-## localStorage について
-
-このアプリはブラウザの localStorage にデータを保存します。
-
-使用しているキー:
+### localStorage に保存するもの
 
 - `living-room-finder.currentUser`
   - 現在どちらとして操作しているか
 - `living-room-finder.properties`
-  - 物件一覧データ
+  - 直近のローカル表示用バックアップ
+- `living-room-finder.sharedWorkspace`
+  - 共有ワークスペース名
+- `living-room-finder.sharedPassphrase`
+  - 共有の合言葉
 
-初回起動時は `living-room-finder.properties` が存在しない場合だけ、サンプルデータを自動投入します。  
-一度保存済みなら、リロードしてもそのデータを使い続けます。
+### Supabase に保存するもの
 
-### 保存データの消し方
+共有ワークスペースの行に、次の内容を保存します。
+
+- `slug`
+  - ワークスペース名
+- `access_hash`
+  - 合言葉のハッシュ値
+- `properties`
+  - 物件一覧の JSON
+- `revision`
+  - 競合検知用の番号
+- `created_at`
+- `updated_at`
+
+## 保存データの消し方
+
+### localStorage を消す
 
 ブラウザの開発者ツールから localStorage を削除するか、コンソールで次を実行してください。
 
 ```js
 localStorage.removeItem("living-room-finder.currentUser");
 localStorage.removeItem("living-room-finder.properties");
+localStorage.removeItem("living-room-finder.sharedWorkspace");
+localStorage.removeItem("living-room-finder.sharedPassphrase");
 location.reload();
 ```
 
-### 大事な注意
+### Supabase の共有データを消す
 
-localStorage は `ドメインごと` に別保存です。  
-つまり次の 3 つは、同じデータにはなりません。
-
-- `localhost`
-- `github.io`
-- `vercel.app`
-
-同じ物件データを 2 人で本当に共有したい場合は、将来 `Supabase` や `Firebase` への移行が必要です。
+Supabase の `shared_workspaces` テーブルから、対象の `slug` の行を削除してください。
 
 ## データ構造
 
@@ -223,12 +269,10 @@ localStorage は `ドメインごと` に別保存です。
 3. 平均が同じ場合は、**2 人のうち高い方のランク** が高い物件を上位にします
 4. それでも同じ場合は、`updatedAt` が新しい物件を上位にします
 
-つまり、片方だけ高評価よりも、2 人とも評価が高い物件が上に来やすいルールです。
-
 ## SUUMO / HOME'S の URL 自動読込の制約
 
 この機能は、ブラウザで直接 `fetch()` するのではなく、`Vercel Function` から取得を試す構成にしています。  
-そのため、GitHub Pages 単体よりは実用的ですが、次の制約は残ります。
+そのため GitHub Pages 単体よりは実用的ですが、次の制約は残ります。
 
 - 掲載サイト側が 403 などで取得を止めることがある
 - HTML 構造が変わると抽出精度が落ちる
@@ -243,15 +287,6 @@ localStorage は `ドメインごと` に別保存です。
 - 失敗時は「手入力で補完してください」と明示する
 - 一部だけ取れた場合は、その分だけフォームに反映する
 
-つまり、URL 自動読込は「全自動登録」ではなく、`入力補助` として使う想定です。
-
-### 利用規約・運用上の注意
-
-- SUUMO / HOME'S に公開 API がある前提では作っていません
-- HTML 解析ベースなので、将来壊れる可能性があります
-- 保存するのは、家賃・間取り・面積・駅・徒歩・住所・築年数などの最低限の事実データに留めています
-- 画像や全文本文の保存は想定していません
-
 ## 地図機能の制約
 
 地図は Leaflet + OpenStreetMap を使っています。  
@@ -262,20 +297,24 @@ API キーは不要ですが、次の制約があります。
 - 緯度 / 経度がない物件は地図に出ず、代わりに一覧で案内する
 - Leaflet 本体と地図タイルは外部配信を使うため、ネット接続がないと地図が表示されない場合がある
 
-将来 geocoding を足す場合でも、今のデータ構造のまま `latitude` / `longitude` を後から埋めれば拡張できます。
+## 共有機能の注意
+
+- 共有ワークスペース名と合言葉は localStorage に保存されます
+- 強い認証機能までは入れていないため、個人利用向けの簡易共有です
+- 同時に別端末で保存すると、競合が起きることがあります
+- 競合した場合は、最新データを読み直して「もう一度保存してください」と案内する仕様です
 
 ## 将来の拡張案
 
-今は localStorage 保存なので、同じブラウザ・同じ端末の中で使う前提です。  
-2 人でリアルタイム共有したくなったら、次の方向に移行しやすい構成です。
+今は `ワークスペース + 合言葉` の簡易共有です。  
+今後もっとしっかりした共有にしたい場合は、次の方向に広げられます。
 
-### Supabase に移行する案
+### Supabase Auth を追加する案
 
-- `properties` テーブルを作る
-- `reviews` を別テーブルに分ける、または JSON カラムで持つ
-- 認証を追加して、けいいち / ほのか が別端末から同じデータを見る
-- Realtime を使えば、片方の更新がもう片方に即反映される
-- 今の `api/import-property.js` はそのまま URL 自動読込の入口として再利用できる
+- `けいいち` / `ほのか` を本当のユーザーアカウントにする
+- 合言葉ではなくログインで共有する
+- Row Level Security で、ワークスペースごとの権限を絞る
+- Realtime で一覧更新を即時反映する
 
 ### Firebase に移行する案
 
@@ -283,4 +322,4 @@ API キーは不要ですが、次の制約があります。
 - Authentication で利用者を分ける
 - Snapshot Listener で一覧や詳細をリアルタイム同期する
 
-今の UI とデータ構造は、`localStorage` の読み書きを Supabase / Firebase の読み書きに置き換えていく形で発展させやすくしています。
+今の `api/import-property.js` と UI はそのまま活かしながら、保存先だけを強化していく形で発展させやすくしています。

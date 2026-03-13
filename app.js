@@ -1,6 +1,12 @@
 const STORAGE_KEYS = {
   currentUser: "living-room-finder.currentUser",
   properties: "living-room-finder.properties",
+  sharedWorkspace: "living-room-finder.sharedWorkspace",
+  sharedPassphrase: "living-room-finder.sharedPassphrase",
+};
+const SHARED_SYNC_DEFAULTS = {
+  workspace: "keiichi-honoka-main",
+  pollIntervalMs: 15000,
 };
 
 const USER_OPTIONS = {
@@ -166,18 +172,33 @@ const state = {
   map: null,
   markerLayer: null,
   mapMarkers: {},
+  sync: {
+    mode: "local",
+    workspace: SHARED_SYNC_DEFAULTS.workspace,
+    passphrase: "",
+    revision: 0,
+    lastSyncedAt: "",
+    statusMessage: "共有設定を保存すると、2台で同じ物件一覧を見られます。",
+    pollTimer: null,
+    isSyncing: false,
+  },
 };
 
 const elements = {};
 let appMessageTimer = null;
 
-document.addEventListener("DOMContentLoaded", initializeApp);
+document.addEventListener("DOMContentLoaded", () => {
+  initializeApp().catch((error) => {
+    console.error(error);
+    showAppMessage("初期化中に問題が起きました。ページを再読み込みしてもう一度試してください。", "danger");
+  });
+});
 
-function initializeApp() {
+async function initializeApp() {
   cacheElements();
-  loadInitialData();
   bindEvents();
   initializeMap();
+  await loadInitialData();
   renderAll();
 
   if (!state.currentUser) {
@@ -190,6 +211,11 @@ function cacheElements() {
   elements.appMessage = document.getElementById("appMessage");
   elements.activeUserName = document.getElementById("activeUserName");
   elements.activeUserHint = document.getElementById("activeUserHint");
+  elements.syncModeLabel = document.getElementById("syncModeLabel");
+  elements.syncStatusMessage = document.getElementById("syncStatusMessage");
+  elements.syncWorkspaceLabel = document.getElementById("syncWorkspaceLabel");
+  elements.syncLastSynced = document.getElementById("syncLastSynced");
+  elements.manualSyncButton = document.getElementById("manualSyncButton");
   elements.currentUserNotice = document.getElementById("currentUserNotice");
   elements.summaryPropertyCount = document.getElementById("summaryPropertyCount");
   elements.summaryFilteredCount = document.getElementById("summaryFilteredCount");
@@ -262,11 +288,26 @@ function cacheElements() {
   elements.savePropertyButton = document.getElementById("savePropertyButton");
 
   elements.settingsForm = document.getElementById("settingsForm");
+  elements.sharedWorkspaceInput = document.getElementById("sharedWorkspaceInput");
+  elements.sharedPassphraseInput = document.getElementById("sharedPassphraseInput");
+  elements.settingsSyncStatus = document.getElementById("settingsSyncStatus");
 }
 
-function loadInitialData() {
+async function loadInitialData() {
   state.currentUser = loadCurrentUserFromStorage();
   state.properties = loadPropertiesFromStorage();
+  loadSharedSyncSettingsFromStorage();
+
+  if (hasSharedSyncConfig()) {
+    const connected = await connectSharedWorkspace(state.properties, { silent: true });
+    if (!connected) {
+      state.properties = loadPropertiesFromStorage();
+      setLocalSyncStatus("共有に接続できなかったため、この端末の保存データを表示しています。");
+    }
+    return;
+  }
+
+  setLocalSyncStatus("現在はこの端末だけに保存しています。共有したいときは設定でワークスペースを保存してください。");
 }
 
 function bindEvents() {
@@ -307,6 +348,9 @@ function bindEvents() {
   document.getElementById("closeSettingsButton").addEventListener("click", closeSettingsFlow);
   document.getElementById("clearImportButton").addEventListener("click", clearImportFields);
   document.getElementById("importFromUrlButton").addEventListener("click", handleImportFromUrl);
+  elements.manualSyncButton.addEventListener("click", () => {
+    refreshSharedProperties({ manual: true });
+  });
 
   [
     elements.searchInput,
@@ -397,10 +441,12 @@ function resetFilters() {
 
 function renderAll() {
   renderCurrentUserArea();
+  renderSyncStatus();
   renderOverview();
   renderPropertyList();
   renderMap();
   syncSettingsForm();
+  syncOpenModalContent();
 }
 
 function renderCurrentUserArea() {
@@ -414,6 +460,36 @@ function renderCurrentUserArea() {
   elements.activeUserName.textContent = getUserLabel(state.currentUser);
   elements.activeUserHint.textContent = `${getUserLabel(state.currentUser)} としてレビューを保存します。`;
   elements.currentUserNotice.classList.add("hidden");
+}
+
+function renderSyncStatus() {
+  if (state.sync.mode === "shared") {
+    elements.syncModeLabel.textContent = "2人で共有中";
+    elements.syncStatusMessage.textContent = state.sync.statusMessage;
+    elements.syncWorkspaceLabel.textContent = `workspace: ${state.sync.workspace}`;
+    elements.syncLastSynced.textContent = state.sync.lastSyncedAt
+      ? `最終同期: ${formatDateTime(state.sync.lastSyncedAt)}`
+      : "最終同期: 接続済み";
+    elements.manualSyncButton.disabled = state.sync.isSyncing;
+    return;
+  }
+
+  elements.syncModeLabel.textContent = "この端末だけ";
+  elements.syncStatusMessage.textContent = state.sync.statusMessage;
+  elements.syncWorkspaceLabel.textContent = "workspace: ローカルのみ";
+  elements.syncLastSynced.textContent = "最終同期: まだ未接続";
+  elements.manualSyncButton.disabled = true;
+}
+
+function syncOpenModalContent() {
+  if (state.openModal === "detail" && state.selectedPropertyId) {
+    const property = findPropertyById(state.selectedPropertyId);
+    if (property) {
+      renderDetailModal(property);
+    } else {
+      closeModal("detail");
+    }
+  }
 }
 
 function renderOverview() {
@@ -724,7 +800,7 @@ function renderQuickReviewEditor(property) {
   elements.focusPropertyOnMapButton.disabled = !hasCoordinates(property);
 }
 
-function handleQuickReviewSubmit(event) {
+async function handleQuickReviewSubmit(event) {
   event.preventDefault();
 
   if (!state.currentUser || !state.selectedPropertyId) {
@@ -745,11 +821,23 @@ function handleQuickReviewSubmit(event) {
     return;
   }
 
-  property.reviews[state.currentUser] = buildReviewRecord(currentReview, newRank, newComment, now);
-  property.updatedAt = now;
-  savePropertiesToStorage();
+  const nextProperty = normalizeProperty({
+    ...property,
+    reviews: {
+      ...cloneReviews(property.reviews),
+      [state.currentUser]: buildReviewRecord(currentReview, newRank, newComment, now),
+    },
+    updatedAt: now,
+  });
+  const persistResult = await persistProperties(upsertPropertyInList(state.properties, nextProperty));
+  if (!persistResult.ok) {
+    elements.quickReviewStatus.textContent = persistResult.message;
+    showAppMessage(persistResult.message, "warning");
+    return;
+  }
+
   renderAll();
-  renderDetailModal(property);
+  renderDetailModal(findPropertyById(state.selectedPropertyId));
   showAppMessage(`${getUserLabel(state.currentUser)}のレビューを保存しました。`, "success");
 }
 
@@ -832,7 +920,7 @@ function renderPropertyFormReviewArea() {
   elements.formReviewComment.value = review.comment || "";
 }
 
-function handlePropertyFormSubmit(event) {
+async function handlePropertyFormSubmit(event) {
   event.preventDefault();
 
   if (!elements.propertyForm.reportValidity()) {
@@ -881,17 +969,18 @@ function handlePropertyFormSubmit(event) {
     );
   }
 
-  if (existingProperty) {
-    const index = state.properties.findIndex((item) => item.id === existingProperty.id);
-    state.properties.splice(index, 1, normalizeProperty(property));
-  } else {
-    state.properties.unshift(normalizeProperty(property));
+  const normalizedProperty = normalizeProperty(property);
+  const nextProperties = upsertPropertyInList(state.properties, normalizedProperty);
+  const persistResult = await persistProperties(nextProperties);
+  if (!persistResult.ok) {
+    elements.formStatusMessage.textContent = persistResult.message;
+    showAppMessage(persistResult.message, "warning");
+    return;
   }
 
-  savePropertiesToStorage();
   closeModal("form");
   renderAll();
-  openPropertyDetail(property.id);
+  openPropertyDetail(normalizedProperty.id);
   showAppMessage(existingProperty ? "物件情報を更新しました。" : "新しい物件を追加しました。", "success");
 }
 
@@ -1033,7 +1122,7 @@ function clearImportFields() {
   elements.importStatusMessage.textContent = "URL 欄をクリアしました。URL なしの手入力でも追加できます。";
 }
 
-function handleSettingsSubmit(event) {
+async function handleSettingsSubmit(event) {
   event.preventDefault();
   const formData = new FormData(elements.settingsForm);
   const selectedUser = formData.get("currentUser");
@@ -1045,6 +1134,41 @@ function handleSettingsSubmit(event) {
 
   state.currentUser = selectedUser;
   saveCurrentUserToStorage(selectedUser);
+
+  const requestedWorkspace = normalizeWorkspaceValue(elements.sharedWorkspaceInput.value) || SHARED_SYNC_DEFAULTS.workspace;
+  const requestedPassphrase = cleanText(elements.sharedPassphraseInput.value);
+
+  if (!requestedPassphrase) {
+    clearSharedSyncSettings();
+    setLocalSyncStatus("共有設定を解除しました。現在はこの端末だけに保存します。");
+    savePropertiesToStorage(state.properties);
+    renderAll();
+
+    const shouldReturnToDetail = state.settingsReturnTarget === "detail" && state.selectedPropertyId;
+    closeModal("settings");
+    state.settingsReturnTarget = null;
+
+    if (shouldReturnToDetail) {
+      openPropertyDetail(state.selectedPropertyId);
+    }
+
+    showAppMessage(`${getUserLabel(selectedUser)} として保存しました。共有はオフです。`, "success");
+    return;
+  }
+
+  elements.settingsSyncStatus.textContent = "共有ワークスペースへ接続しています...";
+  saveSharedSyncSettings(requestedWorkspace, requestedPassphrase);
+  state.sync.workspace = requestedWorkspace;
+  state.sync.passphrase = requestedPassphrase;
+
+  const connected = await connectSharedWorkspace(state.properties);
+  if (!connected) {
+    elements.settingsSyncStatus.textContent = state.sync.statusMessage;
+    renderAll();
+    showAppMessage(state.sync.statusMessage, "warning");
+    return;
+  }
+
   renderAll();
 
   const shouldReturnToDetail = state.settingsReturnTarget === "detail" && state.selectedPropertyId;
@@ -1079,6 +1203,13 @@ function syncSettingsForm() {
   radioButtons.forEach((radio) => {
     radio.checked = radio.value === state.currentUser;
   });
+
+  elements.sharedWorkspaceInput.value = state.sync.workspace || SHARED_SYNC_DEFAULTS.workspace;
+  elements.sharedPassphraseInput.value = state.sync.passphrase || "";
+  elements.settingsSyncStatus.textContent =
+    state.sync.mode === "shared"
+      ? "同じワークスペース名と合言葉を入れた端末同士で、物件一覧を共有しています。"
+      : "共有を使うときは、2台とも同じワークスペース名と合言葉を保存してください。";
 }
 
 function handlePropertyListClick(event) {
@@ -1130,15 +1261,18 @@ function focusPropertyOnMap(propertyId) {
   showAppMessage(`${property.title} を地図で表示しました。`, "success");
 }
 
-function deletePropertyById(propertyId) {
+async function deletePropertyById(propertyId) {
   const property = findPropertyById(propertyId);
   if (!property) return;
 
   const confirmed = window.confirm(`「${property.title}」を削除しますか？ この操作は取り消せません。`);
   if (!confirmed) return;
 
-  state.properties = state.properties.filter((item) => item.id !== propertyId);
-  savePropertiesToStorage();
+  const persistResult = await persistProperties(deletePropertyFromList(state.properties, propertyId));
+  if (!persistResult.ok) {
+    showAppMessage(persistResult.message, "warning");
+    return;
+  }
 
   if (state.selectedPropertyId === propertyId) {
     state.selectedPropertyId = null;
@@ -1324,6 +1458,241 @@ function saveCurrentUserToStorage(userId) {
   writeStorage(STORAGE_KEYS.currentUser, userId);
 }
 
+function loadSharedSyncSettingsFromStorage() {
+  const savedWorkspace = normalizeWorkspaceValue(readStorage(STORAGE_KEYS.sharedWorkspace)) || SHARED_SYNC_DEFAULTS.workspace;
+  const savedPassphrase = cleanText(readStorage(STORAGE_KEYS.sharedPassphrase));
+
+  state.sync.workspace = savedWorkspace;
+  state.sync.passphrase = savedPassphrase;
+}
+
+function saveSharedSyncSettings(workspace, passphrase) {
+  writeStorage(STORAGE_KEYS.sharedWorkspace, workspace);
+  writeStorage(STORAGE_KEYS.sharedPassphrase, passphrase);
+}
+
+function clearSharedSyncSettings() {
+  state.sync.mode = "local";
+  state.sync.workspace = SHARED_SYNC_DEFAULTS.workspace;
+  state.sync.passphrase = "";
+  state.sync.revision = 0;
+  state.sync.lastSyncedAt = "";
+  state.sync.statusMessage = "共有設定を保存すると、2台で同じ物件一覧を見られます。";
+  clearSharedPolling();
+  try {
+    window.localStorage.removeItem(STORAGE_KEYS.sharedWorkspace);
+    window.localStorage.removeItem(STORAGE_KEYS.sharedPassphrase);
+  } catch (error) {
+    // localStorage が使えない場合も、そのままローカル運用へ戻す
+  }
+}
+
+function hasSharedSyncConfig() {
+  return Boolean(state.sync.workspace && state.sync.passphrase);
+}
+
+async function connectSharedWorkspace(seedProperties, options = {}) {
+  const { silent = false } = options;
+
+  if (!hasSharedSyncConfig()) {
+    setLocalSyncStatus("共有設定がないため、この端末だけの保存を使っています。");
+    return false;
+  }
+
+  state.sync.isSyncing = true;
+  renderSyncStatus();
+
+  try {
+    const result = await callSharedApi("connect", {
+      workspace: state.sync.workspace,
+      passphrase: state.sync.passphrase,
+      seedProperties: seedProperties.map(normalizeProperty),
+    });
+
+    applySharedSnapshot(result, result.message);
+    startSharedPolling();
+    return true;
+  } catch (error) {
+    clearSharedPolling();
+    setLocalSyncStatus(error.message || "共有ワークスペースに接続できませんでした。");
+    if (!silent) {
+      elements.settingsSyncStatus.textContent = state.sync.statusMessage;
+    }
+    return false;
+  } finally {
+    state.sync.isSyncing = false;
+    renderSyncStatus();
+  }
+}
+
+async function refreshSharedProperties(options = {}) {
+  const { manual = false } = options;
+
+  if (state.sync.mode !== "shared" || !hasSharedSyncConfig()) {
+    if (manual) {
+      showAppMessage("共有設定がまだ保存されていないため、同期できません。", "warning");
+    }
+    return false;
+  }
+
+  if (state.sync.isSyncing) {
+    return false;
+  }
+
+  state.sync.isSyncing = true;
+  renderSyncStatus();
+
+  try {
+    const result = await callSharedApi("fetch", {
+      workspace: state.sync.workspace,
+      passphrase: state.sync.passphrase,
+    });
+
+    const revisionChanged = Number(result.revision || 0) !== state.sync.revision;
+    applySharedSnapshot(result, manual ? result.message : "共有データの最新状態を反映しています。");
+
+    if (manual) {
+      renderAll();
+      showAppMessage(result.message, "success");
+    } else if (revisionChanged && state.openModal !== "form") {
+      renderAll();
+    }
+
+    return true;
+  } catch (error) {
+    if (manual) {
+      showAppMessage(error.message || "共有データの更新に失敗しました。", "warning");
+    }
+    state.sync.statusMessage = error.message || "共有データの更新に失敗しました。";
+    renderSyncStatus();
+    return false;
+  } finally {
+    state.sync.isSyncing = false;
+    renderSyncStatus();
+  }
+}
+
+async function persistProperties(nextProperties) {
+  const normalizedProperties = nextProperties.map(normalizeProperty);
+
+  if (state.sync.mode !== "shared" || !hasSharedSyncConfig()) {
+    state.properties = normalizedProperties;
+    savePropertiesToStorage(normalizedProperties);
+    return { ok: true };
+  }
+
+  state.sync.isSyncing = true;
+  renderSyncStatus();
+
+  try {
+    const result = await callSharedApi("saveSnapshot", {
+      workspace: state.sync.workspace,
+      passphrase: state.sync.passphrase,
+      properties: normalizedProperties,
+      clientRevision: state.sync.revision,
+    });
+
+    applySharedSnapshot(result, result.message);
+    return { ok: true };
+  } catch (error) {
+    if (error.snapshot) {
+      applySharedSnapshot(error.snapshot, error.message);
+      renderAll();
+    }
+
+    return {
+      ok: false,
+      message: error.message || "共有保存に失敗しました。時間をおいてもう一度試してください。",
+    };
+  } finally {
+    state.sync.isSyncing = false;
+    renderSyncStatus();
+  }
+}
+
+async function callSharedApi(action, payload) {
+  const response = await fetch("/api/shared-properties", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({
+      action,
+      ...payload,
+    }),
+  });
+
+  const result = await response.json().catch(() => null);
+  if (response.ok && result?.success) {
+    return result;
+  }
+
+  const error = new Error(
+    result?.message || buildSharedApiUnavailableMessage(response.status)
+  );
+  error.reason = result?.reason || "shared-api-error";
+
+  if (result?.properties) {
+    error.snapshot = result;
+  }
+
+  throw error;
+}
+
+function applySharedSnapshot(snapshot, statusMessage) {
+  state.properties = (snapshot.properties || []).map(normalizeProperty);
+  state.sync.mode = "shared";
+  state.sync.revision = Number(snapshot.revision || 0);
+  state.sync.lastSyncedAt = cleanText(snapshot.updatedAt);
+  state.sync.statusMessage = statusMessage || "共有ワークスペースと同期しています。";
+  savePropertiesToStorage(state.properties);
+}
+
+function setLocalSyncStatus(message) {
+  state.sync.mode = "local";
+  state.sync.revision = 0;
+  state.sync.lastSyncedAt = "";
+  state.sync.statusMessage = message;
+  clearSharedPolling();
+}
+
+function startSharedPolling() {
+  clearSharedPolling();
+  state.sync.pollTimer = window.setInterval(() => {
+    if (state.sync.mode !== "shared" || state.openModal === "form") {
+      return;
+    }
+    refreshSharedProperties({ manual: false });
+  }, SHARED_SYNC_DEFAULTS.pollIntervalMs);
+}
+
+function clearSharedPolling() {
+  if (state.sync.pollTimer) {
+    window.clearInterval(state.sync.pollTimer);
+    state.sync.pollTimer = null;
+  }
+}
+
+function upsertPropertyInList(list, property) {
+  const normalizedProperty = normalizeProperty(property);
+  const existingIndex = list.findIndex((item) => item.id === normalizedProperty.id);
+  const nextList = list.map((item) => normalizeProperty(item));
+
+  if (existingIndex >= 0) {
+    nextList.splice(existingIndex, 1, normalizedProperty);
+    return nextList;
+  }
+
+  return [normalizedProperty, ...nextList];
+}
+
+function deletePropertyFromList(list, propertyId) {
+  return list
+    .filter((item) => item.id !== propertyId)
+    .map((item) => normalizeProperty(item));
+}
+
 function loadPropertiesFromStorage() {
   const storedValue = readStorage(STORAGE_KEYS.properties);
 
@@ -1345,8 +1714,8 @@ function loadPropertiesFromStorage() {
   }
 }
 
-function savePropertiesToStorage() {
-  writeStorage(STORAGE_KEYS.properties, JSON.stringify(state.properties));
+function savePropertiesToStorage(properties = state.properties) {
+  writeStorage(STORAGE_KEYS.properties, JSON.stringify(properties));
 }
 
 function readStorage(key) {
@@ -1365,6 +1734,27 @@ function writeStorage(key, value) {
     showAppMessage("localStorage に保存できませんでした。プライベートブラウズ設定などを確認してください。", "warning");
     return false;
   }
+}
+
+function normalizeWorkspaceValue(value) {
+  return cleanText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9-_]/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
+}
+
+function buildSharedApiUnavailableMessage(statusCode) {
+  const hostname = window.location.hostname || "";
+  const isGithubPages = hostname.includes("github.io");
+  const isLocalPreview = hostname === "localhost" || hostname === "127.0.0.1";
+
+  if (isGithubPages || isLocalPreview || statusCode === 404) {
+    return "この表示先では共有APIが使えません。Vercel の公開URLで開いているか確認してください。";
+  }
+
+  return "共有データAPIに接続できませんでした。時間をおいてもう一度試してください。";
 }
 
 function normalizeProperty(property) {
