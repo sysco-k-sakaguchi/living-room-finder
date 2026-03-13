@@ -172,6 +172,10 @@ const state = {
   map: null,
   markerLayer: null,
   mapMarkers: {},
+  ui: {
+    activeView: "list",
+    filtersExpanded: false,
+  },
   sync: {
     mode: "local",
     workspace: SHARED_SYNC_DEFAULTS.workspace,
@@ -222,6 +226,12 @@ function cacheElements() {
   elements.summaryTopRatedCount = document.getElementById("summaryTopRatedCount");
   elements.summaryMappedCount = document.getElementById("summaryMappedCount");
   elements.filterSummary = document.getElementById("filterSummary");
+  elements.toggleFiltersButton = document.getElementById("toggleFiltersButton");
+  elements.filtersPanel = document.getElementById("filtersPanel");
+  elements.showListViewButton = document.getElementById("showListViewButton");
+  elements.showMapViewButton = document.getElementById("showMapViewButton");
+  elements.quickNavListButton = document.getElementById("quickNavListButton");
+  elements.quickNavMapButton = document.getElementById("quickNavMapButton");
 
   elements.searchInput = document.getElementById("searchInput");
   elements.sortSelect = document.getElementById("sortSelect");
@@ -233,6 +243,8 @@ function cacheElements() {
 
   elements.propertyList = document.getElementById("propertyList");
   elements.emptyState = document.getElementById("emptyState");
+  elements.listSection = document.getElementById("listSection");
+  elements.mapSection = document.getElementById("mapSection");
   elements.mapCanvas = document.getElementById("mapCanvas");
   elements.mapStatusText = document.getElementById("mapStatusText");
   elements.missingCoordinates = document.getElementById("missingCoordinates");
@@ -336,14 +348,32 @@ function bindEvents() {
     }
   });
 
+  [
+    elements.showListViewButton,
+    elements.quickNavListButton,
+  ].forEach((button) => {
+    if (button) {
+      button.addEventListener("click", () => switchMainView("list"));
+    }
+  });
+
+  [
+    elements.showMapViewButton,
+    elements.quickNavMapButton,
+  ].forEach((button) => {
+    if (button) {
+      button.addEventListener("click", () => switchMainView("map", { scroll: true }));
+    }
+  });
+
   document.getElementById("openSettingsFromDetailButton").addEventListener("click", () => {
     closeModal("detail");
     openSettingsModal("detail");
   });
 
-  document.getElementById("jumpToMapButton").addEventListener("click", invalidateMapSoon);
   document.getElementById("clearFiltersButton").addEventListener("click", resetFilters);
   document.getElementById("emptyResetFiltersButton").addEventListener("click", resetFilters);
+  elements.toggleFiltersButton.addEventListener("click", toggleFiltersPanel);
   document.getElementById("cancelFormButton").addEventListener("click", () => closeModal("form"));
   document.getElementById("closeSettingsButton").addEventListener("click", closeSettingsFlow);
   document.getElementById("clearImportButton").addEventListener("click", clearImportFields);
@@ -443,6 +473,8 @@ function renderAll() {
   renderCurrentUserArea();
   renderSyncStatus();
   renderOverview();
+  renderFilterUi();
+  renderViewState();
   renderPropertyList();
   renderMap();
   syncSettingsForm();
@@ -515,6 +547,64 @@ function renderOverview() {
     : `${state.properties.length}件中 ${visibleProperties.length}件を表示中。`;
 }
 
+function renderFilterUi() {
+  const appliedCount = getAppliedFilterCount();
+  const buttonLabel = state.ui.filtersExpanded
+    ? "絞り込みを閉じる"
+    : appliedCount > 0
+      ? `絞り込み ${appliedCount}件`
+      : "絞り込み";
+
+  elements.toggleFiltersButton.textContent = buttonLabel;
+  elements.filtersPanel.classList.toggle("hidden", !state.ui.filtersExpanded);
+}
+
+function renderViewState() {
+  const isListView = state.ui.activeView === "list";
+  elements.listSection.classList.toggle("hidden", !isListView);
+  elements.mapSection.classList.toggle("hidden", isListView);
+  syncViewButtonState(elements.showListViewButton, isListView);
+  syncViewButtonState(elements.quickNavListButton, isListView);
+  syncViewButtonState(elements.showMapViewButton, !isListView);
+  syncViewButtonState(elements.quickNavMapButton, !isListView);
+
+  if (!isListView) {
+    invalidateMapSoon();
+  }
+}
+
+function syncViewButtonState(button, isActive) {
+  if (!button) return;
+  button.classList.toggle("is-active", isActive);
+  button.setAttribute("aria-pressed", String(isActive));
+}
+
+function toggleFiltersPanel() {
+  state.ui.filtersExpanded = !state.ui.filtersExpanded;
+  renderFilterUi();
+}
+
+function switchMainView(viewName, options = {}) {
+  state.ui.activeView = viewName === "map" ? "map" : "list";
+  renderViewState();
+
+  if (options.scroll) {
+    const target = state.ui.activeView === "map" ? elements.mapSection : elements.listSection;
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+}
+
+function getAppliedFilterCount() {
+  let count = 0;
+  if (state.filters.search) count += 1;
+  if (state.filters.addedBy !== "all") count += 1;
+  if (state.filters.sourceSite !== "all") count += 1;
+  if (state.filters.rank !== "all") count += 1;
+  if (state.filters.maxRent) count += 1;
+  if (state.filters.maxWalk) count += 1;
+  return count;
+}
+
 function renderPropertyList() {
   const visibleProperties = getVisibleProperties();
   elements.propertyList.innerHTML = visibleProperties.map(buildPropertyCardHtml).join("");
@@ -522,83 +612,51 @@ function renderPropertyList() {
 }
 
 function buildPropertyCardHtml(property) {
-  const comments = getCommentCount(property);
-  const urlButton = property.url
-    ? `<a class="secondary-button" href="${escapeHtml(property.url)}" target="_blank" rel="noreferrer">元URL</a>`
-    : `<button type="button" class="secondary-button" disabled>URLなし</button>`;
+  const orderedUsers = state.currentUser
+    ? [state.currentUser, ...USER_IDS.filter((userId) => userId !== state.currentUser)]
+    : USER_IDS;
 
   return `
     <article class="property-card" data-property-id="${escapeHtml(property.id)}">
-      <div class="card-top">
-        <div class="badge-row">
-          <span class="chip chip-site">${escapeHtml(property.sourceSite)}</span>
-          <span class="chip ${USER_OPTIONS[property.addedBy].chipClass}">${escapeHtml(getUserLabel(property.addedBy))}追加</span>
-          <span class="chip chip-comment">${comments === 0 ? "コメントなし" : `コメント${comments}件`}</span>
-        </div>
-        <button type="button" class="text-button" data-action="open-detail" data-property-id="${escapeHtml(property.id)}">
-          詳細を見る
-        </button>
-      </div>
-
-      <div>
+      <div class="property-card-heading">
         <h3 class="property-title">${escapeHtml(property.title)}</h3>
         <p class="property-summary">
-          ${escapeHtml(formatCurrency(property.rent))} / ${escapeHtml(property.layout)} / ${escapeHtml(formatArea(property.areaSize))}
+          ${escapeHtml(formatCurrency(property.rent))} / ${escapeHtml(property.layout || "間取り未入力")}
         </p>
       </div>
 
-      <div class="meta-grid">
-        <div class="meta-item">
-          <span>最寄り駅</span>
-          <strong>${escapeHtml(formatStation(property.station))}</strong>
-        </div>
-        <div class="meta-item">
-          <span>徒歩</span>
-          <strong>${escapeHtml(formatWalk(property.walkMinutes))}</strong>
-        </div>
-        <div class="meta-item">
-          <span>住所</span>
-          <strong>${escapeHtml(property.address || "未入力")}</strong>
-        </div>
-        <div class="meta-item">
-          <span>更新日時</span>
-          <strong>${escapeHtml(formatDateTime(property.updatedAt))}</strong>
-        </div>
+      <div class="card-meta-inline">
+        <span class="meta-inline-text">${escapeHtml(formatStation(property.station))}</span>
+        <span class="meta-inline-text">${escapeHtml(formatWalk(property.walkMinutes))}</span>
+        <span class="chip ${USER_OPTIONS[property.addedBy].chipClass}">${escapeHtml(getUserLabel(property.addedBy))}追加</span>
       </div>
 
-      <div class="review-strip">
-        ${buildReviewPill(property, "keiichi")}
-        ${buildReviewPill(property, "honoka")}
+      <div class="review-compact-strip">
+        ${orderedUsers.map((userId) => buildCompactReviewCard(property, userId)).join("")}
       </div>
 
-      <div class="card-actions">
-        <button type="button" class="secondary-button" data-action="open-detail" data-property-id="${escapeHtml(property.id)}">詳細</button>
-        <button type="button" class="secondary-button" data-action="edit-property" data-property-id="${escapeHtml(property.id)}">編集</button>
-        <button
-          type="button"
-          class="secondary-button"
-          data-action="focus-on-map"
-          data-property-id="${escapeHtml(property.id)}"
-          ${hasCoordinates(property) ? "" : "disabled"}
-        >
-          地図
+      <div class="card-actions card-actions-compact">
+        <button type="button" class="primary-button" data-action="open-detail" data-property-id="${escapeHtml(property.id)}">
+          詳細を見る
         </button>
-        ${urlButton}
       </div>
     </article>
   `;
 }
 
-function buildReviewPill(property, userId) {
+function buildCompactReviewCard(property, userId) {
   const review = property.reviews[userId];
   const isCurrentUser = state.currentUser === userId;
-  const commentText = review.comment ? "コメントあり" : "コメントなし";
+  const summaryLabel = state.currentUser
+    ? isCurrentUser
+      ? "自分の評価"
+      : "相手の評価"
+    : `${getUserLabel(userId)}の評価`;
 
   return `
-    <div class="review-pill ${USER_OPTIONS[userId].reviewClass} ${isCurrentUser ? "review-pill-current" : ""}">
-      <span>${escapeHtml(getUserLabel(userId))}</span>
+    <div class="review-summary-card ${USER_OPTIONS[userId].reviewClass} ${isCurrentUser ? "review-pill-current" : ""}">
+      <span class="label">${escapeHtml(summaryLabel)}</span>
       <span class="rank-chip ${getRankClassName(review.rank)}">${escapeHtml(review.rank || "未評価")}</span>
-      <span>${commentText}</span>
     </div>
   `;
 }
@@ -1245,7 +1303,7 @@ function focusPropertyOnMap(propertyId) {
     return;
   }
 
-  document.getElementById("mapSection").scrollIntoView({ behavior: "smooth", block: "start" });
+  switchMainView("map", { scroll: true });
   invalidateMapSoon();
 
   window.setTimeout(() => {
@@ -1885,7 +1943,7 @@ function formatCurrency(value) {
 
 function formatArea(value) {
   if (!hasMeaningfulValue(value)) return "未入力";
-  return `${Number(value).toFixed(Number(value) % 1 === 0 ? 0 : 1)}m²`;
+  return `${new Intl.NumberFormat("ja-JP", { maximumFractionDigits: 2 }).format(Number(value))}m²`;
 }
 
 function formatWalk(value) {
