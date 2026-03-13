@@ -1,6 +1,626 @@
-{\rtf1\ansi\ansicpg932\cocoartf2868
-\cocoatextscaling0\cocoaplatform0{\fonttbl}
-{\colortbl;\red255\green255\blue255;}
-{\*\expandedcolortbl;;}
-\paperw11900\paperh16840\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+import { load } from "cheerio";
+
+const SUPPORTED_SOURCE_SITES = ["SUUMO", "HOME'S"];
+const IMPORT_FIELD_KEYS = ["title", "rent", "layout", "areaSize", "station", "walkMinutes", "address", "builtYear"];
+const IMPORT_FIELD_LABELS = {
+  title: "物件名",
+  rent: "家賃",
+  layout: "間取り",
+  areaSize: "面積",
+  station: "最寄り駅",
+  walkMinutes: "徒歩分数",
+  address: "住所",
+  builtYear: "築年数または築年月",
+};
+const JAPAN_PREFECTURE_PATTERN =
+  /(東京都|北海道|(?:京都|大阪)府|(?:青森|岩手|宮城|秋田|山形|福島|茨城|栃木|群馬|埼玉|千葉|神奈川|新潟|富山|石川|福井|山梨|長野|岐阜|静岡|愛知|三重|滋賀|兵庫|奈良|和歌山|鳥取|島根|岡山|広島|山口|徳島|香川|愛媛|高知|福岡|佐賀|長崎|熊本|大分|宮崎|鹿児島|沖縄)県)/;
+const DEFAULT_HEADERS = {
+  "accept-language": "ja,en-US;q=0.8,en;q=0.6",
+  "user-agent":
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+};
+
+export function GET() {
+  return jsonResponse({
+    success: false,
+    message: "POST で URL を送ると、SUUMO / HOME'S の自動読込を試します。",
+  });
+}
+
+export async function POST(request) {
+  let body = null;
+
+  try {
+    body = await request.json();
+  } catch (error) {
+    return jsonResponse(
+      {
+        success: false,
+        message: "送信データを読めませんでした。URL を入れ直してもう一度試してください。",
+      },
+      400
+    );
+  }
+
+  const rawUrl = cleanText(body?.url);
+  const preferredSite = normalizeRequestedSourceSite(body?.preferredSite);
+
+  if (!rawUrl) {
+    return jsonResponse(
+      {
+        success: false,
+        message: "URL が空です。SUUMO または HOME'S の URL を入力してください。",
+      },
+      400
+    );
+  }
+
+  const normalizedUrl = normalizeUrl(rawUrl);
+  if (!normalizedUrl) {
+    return jsonResponse(
+      {
+        success: false,
+        message: "URL の形式が正しくありません。https:// から始まる URL を入力してください。",
+      },
+      400
+    );
+  }
+
+  const detectedSite = detectSourceSiteFromUrl(normalizedUrl);
+  const resolvedSite = detectedSite || preferredSite || "";
+  const fields = {
+    url: normalizedUrl,
+    sourceSite: normalizeSourceSiteValue(resolvedSite || "手入力"),
+  };
+
+  if (!detectedSite && !preferredSite) {
+    return jsonResponse({
+      success: false,
+      fallbackRequired: true,
+      detectedSite: "",
+      fields,
+      populatedFields: [],
+      missingFields: IMPORT_FIELD_KEYS,
+      reason: "unsupported-url",
+      message: "SUUMO / HOME'S の URL と判定できませんでした。URL は保持したので、手入力で補完してください。",
+    });
+  }
+
+  if (!SUPPORTED_SOURCE_SITES.includes(resolvedSite)) {
+    return jsonResponse({
+      success: false,
+      fallbackRequired: true,
+      detectedSite: resolvedSite,
+      fields,
+      populatedFields: [],
+      missingFields: IMPORT_FIELD_KEYS,
+      reason: "manual-only",
+      message: "URL は保持しました。自動読込の対象外なので、下の手入力フォームで補完してください。",
+    });
+  }
+
+  try {
+    const html = await fetchListingHtml(normalizedUrl);
+    const extractedFields = extractPropertyFromHtml(html, resolvedSite);
+    const mergedFields = removeEmptyFields({
+      ...fields,
+      ...extractedFields,
+    });
+    const populatedFields = IMPORT_FIELD_KEYS.filter((key) => hasMeaningfulValue(mergedFields[key]));
+    const missingFields = IMPORT_FIELD_KEYS.filter((key) => !hasMeaningfulValue(mergedFields[key]));
+
+    if (populatedFields.length === 0) {
+      return jsonResponse({
+        success: false,
+        fallbackRequired: true,
+        detectedSite: resolvedSite,
+        fields: mergedFields,
+        populatedFields,
+        missingFields,
+        reason: "no-fields",
+        message:
+          `${resolvedSite} と判定しましたが、十分な情報を抜き出せませんでした。` +
+          "URL は保持したので、手入力で補完してください。",
+      });
+    }
+
+    return jsonResponse({
+      success: true,
+      fallbackRequired: missingFields.length > 0,
+      detectedSite: resolvedSite,
+      fields: mergedFields,
+      populatedFields,
+      missingFields,
+      reason: "",
+      message: buildSuccessMessage(resolvedSite, populatedFields, missingFields),
+    });
+  } catch (error) {
+    return jsonResponse({
+      success: false,
+      fallbackRequired: true,
+      detectedSite: resolvedSite,
+      fields,
+      populatedFields: [],
+      missingFields: IMPORT_FIELD_KEYS,
+      reason: buildFailureReason(error),
+      message: buildFailureMessage(resolvedSite, error),
+    });
+  }
+}
+
+async function fetchListingHtml(url) {
+  const response = await fetch(url, {
+    headers: DEFAULT_HEADERS,
+    redirect: "follow",
+    signal: AbortSignal.timeout(10000),
+  });
+
+  if (!response.ok) {
+    throw new HttpStatusError(response.status, `HTTP ${response.status}`);
+  }
+
+  const html = await response.text();
+  if (!html) {
+    throw new Error("empty-html");
+  }
+
+  assertHtmlLooksLikeListing(html);
+
+  return html;
+}
+
+function assertHtmlLooksLikeListing(html) {
+  const normalizedHtml = html.toLowerCase();
+  const blockedMarkers = [
+    "the request could not be satisfied",
+    "generated by cloudfront",
+    "<title>error:",
+    "access denied",
+    "request blocked",
+    "403 forbidden",
+    "please enable cookies",
+    "captcha",
+  ];
+
+  if (blockedMarkers.some((marker) => normalizedHtml.includes(marker))) {
+    throw new BlockedPageError("blocked-html");
+  }
+}
+
+function extractPropertyFromHtml(html, sourceSite) {
+  const $ = load(html);
+  const pageText = normalizeWhitespace($.root().text().replace(/\u3000/g, " "));
+  const jsonLdObjects = parseJsonLd($);
+  const labelValuePairs = collectLabelValuePairs($);
+
+  const titleCandidate = cleanImportedTitle(
+    firstMeaningful([
+      $('meta[property="og:title"]').attr("content"),
+      $('meta[name="twitter:title"]').attr("content"),
+      ...jsonLdObjects.map((item) => item?.name),
+      $("h1").first().text(),
+      $("title").text(),
+    ]),
+    sourceSite
+  );
+
+  const transportText = firstMeaningful([
+    findLabeledValue(labelValuePairs, [/交通/, /アクセス/, /沿線・駅/, /最寄り駅/]),
+    pageText,
+  ]);
+  const stationInfo = extractStationInfo(transportText);
+
+  const rentText = firstMeaningful([
+    findLabeledValue(labelValuePairs, [/賃料/, /賃貸料/, /賃料等/]),
+    ...jsonLdObjects.map(extractPriceFromJsonLd),
+    pageText,
+  ]);
+
+  const layoutText = firstMeaningful([
+    findLabeledValue(labelValuePairs, [/間取り/, /間取/]),
+    pageText,
+  ]);
+
+  const areaText = firstMeaningful([
+    findLabeledValue(labelValuePairs, [/専有面積/, /面積/, /建物面積/]),
+    pageText,
+  ]);
+
+  const addressCandidate = firstMeaningful([
+    extractAddressFromMeta($),
+    findLabeledValue(labelValuePairs, [/所在地/, /住所/]),
+    ...jsonLdObjects.map(extractAddressFromJsonLd),
+    matchJapaneseAddress(pageText),
+  ]);
+
+  const builtYearText = firstMeaningful([
+    findLabeledValue(labelValuePairs, [/築年月/, /築年数/, /築年月\(築年数\)/]),
+    ...jsonLdObjects.map(extractBuiltYearFromJsonLd),
+    pageText,
+  ]);
+
+  return removeEmptyFields({
+    title: titleCandidate,
+    rent: extractRentFromText(rentText),
+    layout: extractLayoutFromText(layoutText),
+    areaSize: extractAreaSizeFromText(areaText),
+    station: stationInfo.station,
+    walkMinutes: stationInfo.walkMinutes,
+    address: addressCandidate,
+    builtYear: extractBuiltYearFromText(builtYearText),
+  });
+}
+
+function collectLabelValuePairs($) {
+  const pairs = [];
+
+  $("table tr").each((_, row) => {
+    const label = normalizeWhitespace($(row).find("th").first().text());
+    const value = normalizeWhitespace($(row).find("td").first().text());
+
+    if (label && value) {
+      pairs.push([label, value]);
+    }
+  });
+
+  $("dl").each((_, dl) => {
+    let currentLabel = "";
+
+    $(dl)
+      .children("dt, dd")
+      .each((__, node) => {
+        const tagName = node.tagName?.toLowerCase();
+        const text = normalizeWhitespace($(node).text());
+
+        if (!text) {
+          return;
+        }
+
+        if (tagName === "dt") {
+          currentLabel = text;
+          return;
+        }
+
+        if (tagName === "dd" && currentLabel) {
+          pairs.push([currentLabel, text]);
+          currentLabel = "";
+        }
+      });
+  });
+
+  return pairs;
+}
+
+function findLabeledValue(pairs, patterns) {
+  for (const [label, value] of pairs) {
+    if (patterns.some((pattern) => pattern.test(label))) {
+      return value;
+    }
+  }
+
+  return "";
+}
+
+function parseJsonLd($) {
+  return $('script[type="application/ld+json"]')
+    .toArray()
+    .flatMap((scriptElement) => {
+      try {
+        const raw = $(scriptElement).html() || "{}";
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [parsed];
+      } catch (error) {
+        return [];
+      }
+    });
+}
+
+function extractPriceFromJsonLd(item) {
+  const offers = item?.offers;
+  const price = offers?.price || offers?.lowPrice || item?.price;
+
+  if (!hasMeaningfulValue(price)) {
+    return "";
+  }
+
+  const numericPrice = Number(price);
+  if (Number.isFinite(numericPrice) && numericPrice > 0) {
+    return `${numericPrice}円`;
+  }
+
+  return cleanText(price);
+}
+
+function extractAddressFromJsonLd(item) {
+  if (!item?.address) return "";
+  if (typeof item.address === "string") return cleanText(item.address);
+
+  const parts = [
+    item.address.addressRegion,
+    item.address.addressLocality,
+    item.address.streetAddress,
+  ].filter(Boolean);
+
+  return parts.join("");
+}
+
+function extractAddressFromMeta($) {
+  const description = cleanText($('meta[name="description"]').attr("content"));
+  if (!description) {
+    return "";
+  }
+
+  const match = description.match(/所在地[:：]\s*([^、。]+)/);
+  if (!match) {
+    return "";
+  }
+
+  return cleanText(match[1]).replace(/の賃貸.*$/u, "").trim();
+}
+
+function extractBuiltYearFromJsonLd(item) {
+  if (!item) return "";
+
+  if (item.yearBuilt) {
+    return normalizeBuiltYearToken(String(item.yearBuilt));
+  }
+
+  if (item.dateCreated) {
+    return normalizeBuiltYearToken(String(item.dateCreated));
+  }
+
+  return "";
+}
+
+function extractRentFromText(text) {
+  if (!text) return null;
+
+  const rentInMan = text.match(/賃料[^0-9]{0,12}(\d{1,3}(?:\.\d+)?)\s*万円/i) || text.match(/(\d{1,3}(?:\.\d+)?)\s*万円/i);
+  if (rentInMan) {
+    return Math.round(Number(rentInMan[1]) * 10000);
+  }
+
+  const rentInYen =
+    text.match(/賃料[^0-9]{0,12}(\d{1,3}(?:,\d{3})+|\d{4,7})\s*円/i) ||
+    text.match(/(\d{1,3}(?:,\d{3})+|\d{4,7})\s*円/i);
+
+  return rentInYen ? Number(rentInYen[1].replaceAll(",", "")) : null;
+}
+
+function extractLayoutFromText(text) {
+  if (!text) return "";
+
+  const match = text.match(/(ワンルーム|1R|1K|1DK|1LDK|2K|2DK|2LDK|3K|3DK|3LDK|4K|4DK|4LDK)/i);
+  if (!match) {
+    return "";
+  }
+
+  return match[1] === "ワンルーム" ? "ワンルーム" : match[1].toUpperCase();
+}
+
+function extractAreaSizeFromText(text) {
+  const match = text.match(/(\d{1,3}(?:\.\d+)?)\s*(?:m2|m²|㎡)/i);
+  return match ? Number(match[1]) : null;
+}
+
+function extractStationInfo(text) {
+  const patterns = [
+    /([^\n]{1,80}?駅)\s*(?:徒歩|歩)\s*(\d{1,2})分/,
+    /([^\n]{1,80}?駅)[^\d]{0,12}(\d{1,2})分/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match) {
+      continue;
+    }
+
+    return {
+      station: cleanStationName(match[1]),
+      walkMinutes: Number(match[2]),
+    };
+  }
+
+  return { station: "", walkMinutes: null };
+}
+
+function cleanStationName(value) {
+  const slashSplit = cleanText(value)
+    .split(/[\/／]/)
+    .map((item) => cleanText(item))
+    .filter(Boolean);
+  let station = slashSplit.length ? slashSplit[slashSplit.length - 1] : cleanText(value);
+
+  const spaceSplit = station.split(/\s+/).filter(Boolean);
+  if (spaceSplit.length > 1) {
+    station = spaceSplit[spaceSplit.length - 1];
+  }
+
+  return station.replace(/[()（）]/g, "").replace(/駅$/, "");
+}
+
+function matchJapaneseAddress(text) {
+  const match = text.match(new RegExp(`${JAPAN_PREFECTURE_PATTERN.source}[^\\n]{4,90}`));
+  return match ? cleanText(match[0]) : "";
+}
+
+function extractBuiltYearFromText(text) {
+  if (!text) return "";
+
+  const patterns = [
+    /(20\d{2}年\d{1,2}月|19\d{2}年\d{1,2}月)/,
+    /(20\d{2}[\/.-]\d{1,2}|19\d{2}[\/.-]\d{1,2})/,
+    /(築\d{1,2}年)/,
+    /(新築)/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      return normalizeBuiltYearToken(match[1]);
+    }
+  }
+
+  return "";
+}
+
+function normalizeBuiltYearToken(value) {
+  const cleaned = cleanText(value);
+
+  if (/^\d{4}$/.test(cleaned)) {
+    return `${cleaned}年`;
+  }
+
+  const yearMonthMatch = cleaned.match(/((?:19|20)\d{2})[\/.-](\d{1,2})/);
+  if (yearMonthMatch) {
+    return `${yearMonthMatch[1]}年${Number(yearMonthMatch[2])}月`;
+  }
+
+  return cleaned;
+}
+
+function cleanImportedTitle(title, sourceSite) {
+  if (!title) return "";
+
+  const sourceSitePattern = sourceSite.replace("'", "\\'");
+
+  return cleanText(title)
+    .replace(/^\[[^\]]+\]\s*/, "")
+    .replace(/^【[^】]+】\s*/, "")
+    .replace(/\s*\[[^\]]+\]\s*$/, "")
+    .replace(/\s*[|｜].*$/, "")
+    .replace(/\s*-\s*(SUUMO|HOME'S).*$/i, "")
+    .replace(new RegExp(`\\s*${sourceSitePattern}\\s*$`, "i"), "")
+    .replace(/／(?:東京都|北海道|(?:京都|大阪)府|.+?県).*$|\/(?:東京都|北海道|(?:京都|大阪)府|.+?県).*$/u, "")
+    .replace(/\s*の賃貸.*$/u, "")
+    .replace(/\s*賃貸住宅.*$/u, "")
+    .trim();
+}
+
+function buildSuccessMessage(sourceSite, populatedFields, missingFields) {
+  const successText = `${sourceSite} と判定し、${formatImportedFieldNames(populatedFields)} をフォームに反映しました。`;
+  if (missingFields.length === 0) {
+    return `${successText} 気になる点があれば内容を確認して、そのまま保存できます。`;
+  }
+
+  return `${successText} 未取得: ${formatImportedFieldNames(missingFields)}。足りない項目だけ手入力で補完してください。`;
+}
+
+function buildFailureMessage(sourceSite, error) {
+  if (error instanceof BlockedPageError) {
+    return (
+      `${sourceSite} と判定しましたが、掲載サイトの保護ページが返りました。` +
+      "URL は保持したので、手入力で補完してください。"
+    );
+  }
+
+  if (error instanceof HttpStatusError && error.status === 403) {
+    return (
+      `${sourceSite} と判定しましたが、掲載サイト側に取得を止められました。` +
+      "URL は保持したので、手入力で補完してください。"
+    );
+  }
+
+  if (error.name === "TimeoutError" || error.name === "AbortError") {
+    return `${sourceSite} と判定しましたが、取得が時間切れになりました。URL は保持したので、手入力で補完してください。`;
+  }
+
+  return (
+    `${sourceSite} と判定しましたが、自動読込はできませんでした。` +
+    "掲載サイトの仕様変更や通信状況の影響が考えられます。URL は保持したので、手入力で補完してください。"
+  );
+}
+
+function buildFailureReason(error) {
+  if (error instanceof BlockedPageError) {
+    return "blocked-html";
+  }
+
+  if (error instanceof HttpStatusError) {
+    return `http-${error.status}`;
+  }
+
+  if (error.name === "TimeoutError" || error.name === "AbortError") {
+    return "timeout";
+  }
+
+  return "fetch-failed";
+}
+
+function formatImportedFieldNames(fieldNames) {
+  return fieldNames.map((fieldName) => IMPORT_FIELD_LABELS[fieldName] || fieldName).join(" / ");
+}
+
+function jsonResponse(payload, status = 200) {
+  return Response.json(payload, {
+    status,
+    headers: {
+      "cache-control": "no-store",
+    },
+  });
+}
+
+function detectSourceSiteFromUrl(url) {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+
+    if (hostname.includes("suumo.jp")) return "SUUMO";
+    if (hostname.includes("homes.co.jp")) return "HOME'S";
+
+    return "";
+  } catch (error) {
+    return "";
+  }
+}
+
+function normalizeRequestedSourceSite(value) {
+  return SUPPORTED_SOURCE_SITES.includes(value) ? value : "";
+}
+
+function normalizeSourceSiteValue(value) {
+  return SUPPORTED_SOURCE_SITES.includes(value) ? value : "手入力";
+}
+
+function normalizeUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return /^https?:$/i.test(parsed.protocol) ? parsed.toString() : "";
+  } catch (error) {
+    return "";
+  }
+}
+
+function firstMeaningful(values) {
+  return values.find((value) => hasMeaningfulValue(value)) || "";
+}
+
+function removeEmptyFields(object) {
+  return Object.fromEntries(Object.entries(object).filter(([, value]) => hasMeaningfulValue(value)));
+}
+
+function hasMeaningfulValue(value) {
+  return value !== null && value !== undefined && value !== "";
+}
+
+function cleanText(value) {
+  return typeof value === "string" ? value.trim() : value == null ? "" : String(value).trim();
+}
+
+function normalizeWhitespace(value) {
+  return cleanText(value).replace(/\s+/g, " ");
+}
+
+class HttpStatusError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.name = "HttpStatusError";
+    this.status = status;
+  }
+}
+
+class BlockedPageError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "BlockedPageError";
+  }
 }

@@ -20,17 +20,6 @@ const USER_OPTIONS = {
 
 const USER_IDS = Object.keys(USER_OPTIONS);
 const RANK_SCORES = { "": 0, C: 1, B: 2, A: 3, S: 4 };
-const IMPORT_FIELD_LABELS = {
-  title: "物件名",
-  rent: "家賃",
-  layout: "間取り",
-  areaSize: "面積",
-  station: "最寄り駅",
-  walkMinutes: "徒歩分数",
-  address: "住所",
-  builtYear: "築年数または築年月",
-};
-
 const SAMPLE_PROPERTIES = [
   {
     id: "sample-001",
@@ -787,7 +776,7 @@ function openPropertyForm(propertyId = null) {
 function resetPropertyForm() {
   elements.propertyForm.reset();
   elements.formStatusMessage.textContent = "";
-  elements.importStatusMessage.textContent = "まずは URL を判定し、可能ならブラウザから取得を試します。";
+  elements.importStatusMessage.textContent = "まずは URL を判定し、対応していれば自動読込を試します。";
   elements.importUrlInput.value = "";
   elements.importSourceSite.value = "自動判定";
   elements.propertySourceSite.value = "手入力";
@@ -924,12 +913,13 @@ async function handleImportFromUrl() {
 
   const detectedSite = detectSourceSiteFromUrl(normalizedUrl);
   const selectedHint = elements.importSourceSite.value;
-  const preferredSite = selectedHint !== "自動判定" ? selectedHint : detectedSite || "手入力";
+  const preferredSite = selectedHint !== "自動判定" ? selectedHint : "自動判定";
+  const previewSite = detectedSite || (preferredSite !== "自動判定" ? preferredSite : "");
 
   elements.importStatusMessage.textContent = "URL を判定して、自動読込を試しています...";
 
-  if (preferredSite && preferredSite !== "自動判定") {
-    elements.propertySourceSite.value = normalizeSourceSiteValue(preferredSite);
+  if (previewSite) {
+    elements.propertySourceSite.value = normalizeSourceSiteValue(previewSite);
   }
 
   const importButton = document.getElementById("importFromUrlButton");
@@ -948,7 +938,7 @@ async function handleImportFromUrl() {
 
 async function attemptImportFromUrl(url, preferredSite) {
   const detectedSite = detectSourceSiteFromUrl(url);
-  const finalSite = preferredSite && preferredSite !== "自動判定" ? preferredSite : detectedSite || "手入力";
+  const finalSite = detectedSite || (preferredSite && preferredSite !== "自動判定" ? preferredSite : "手入力");
   const fields = {
     url,
     sourceSite: normalizeSourceSiteValue(finalSite),
@@ -971,90 +961,31 @@ async function attemptImportFromUrl(url, preferredSite) {
   }
 
   try {
-    // CORS の都合で失敗しやすいため、成功しても「補助入力」扱いで使います。
-    const response = await fetch(url, {
-      method: "GET",
-      mode: "cors",
-      credentials: "omit",
-      redirect: "follow",
+    const response = await fetch("/api/import-property", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        url,
+        preferredSite: preferredSite !== "自動判定" ? preferredSite : "",
+      }),
     });
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-
-    const html = await response.text();
-    const extractedFields = extractPropertyFromHtml(html, finalSite);
-    const mergedFields = { ...fields, ...extractedFields };
-    const populatedKeys = Object.keys(extractedFields).filter((key) => hasMeaningfulValue(extractedFields[key]));
-
-    if (populatedKeys.length === 0) {
-      return {
-        fields: mergedFields,
-        message:
-          `${finalSite} と判定しましたが、ブラウザから十分な情報を抜き出せませんでした。` +
-          "URL は保持したので、手入力で補完してください。",
-        tone: "warning",
-      };
-    }
+    const result = await response.json().catch(() => null);
 
     return {
-      fields: mergedFields,
-      message:
-        `${finalSite} と判定し、${formatImportedFieldNames(populatedKeys)} をフォームに反映しました。` +
-        "足りない項目だけ手入力で補完してください。",
-      tone: "success",
+      fields: { ...fields, ...(result?.fields || {}) },
+      message: result?.message || buildImportApiUnavailableMessage(response.status),
+      tone: response.ok && result?.success ? "success" : "warning",
     };
   } catch (error) {
     return {
       fields,
-      message:
-        `${finalSite} と判定しましたが、自動読込はできませんでした。` +
-        "ブラウザの CORS 制約や掲載サイトの仕様による可能性があります。URL は保持したので、手入力で補完してください。",
+      message: buildImportApiUnavailableMessage(),
       tone: "warning",
     };
   }
-}
-
-function extractPropertyFromHtml(html, sourceSite) {
-  const parser = new DOMParser();
-  const documentFromHtml = parser.parseFromString(html, "text/html");
-  const pageText = normalizeWhitespace(
-    (documentFromHtml.body?.textContent || documentFromHtml.documentElement?.textContent || "").replace(/\u3000/g, " ")
-  );
-  const jsonLdObjects = parseJsonLd(documentFromHtml);
-
-  const addressCandidate = firstMeaningful([
-    ...jsonLdObjects.map(extractAddressFromJsonLd),
-    matchJapaneseAddress(pageText),
-  ]);
-  const stationInfo = extractStationInfo(pageText);
-  const builtYearCandidate = firstMeaningful([
-    ...jsonLdObjects.map(extractBuiltYearFromJsonLd),
-    extractBuiltYearFromText(pageText),
-  ]);
-  const titleCandidate = cleanImportedTitle(
-    firstMeaningful([
-      documentFromHtml.querySelector('meta[property="og:title"]')?.getAttribute("content"),
-      documentFromHtml.querySelector('meta[name="twitter:title"]')?.getAttribute("content"),
-      ...jsonLdObjects.map((item) => item?.name),
-      documentFromHtml.title,
-    ]),
-    sourceSite
-  );
-
-  const extracted = {
-    title: titleCandidate,
-    rent: extractRentFromText(pageText),
-    layout: extractLayoutFromText(pageText),
-    areaSize: extractAreaSizeFromText(pageText),
-    station: stationInfo.station,
-    walkMinutes: stationInfo.walkMinutes,
-    address: addressCandidate,
-    builtYear: builtYearCandidate,
-  };
-
-  return removeEmptyFields(extracted);
 }
 
 function applyImportedFields(fields) {
@@ -1081,6 +1012,18 @@ function applyImportedFields(fields) {
 function setFieldValueIfPresent(element, value) {
   if (!hasMeaningfulValue(value)) return;
   element.value = String(value);
+}
+
+function buildImportApiUnavailableMessage(statusCode) {
+  const hostname = window.location.hostname || "";
+  const isGithubPages = hostname.includes("github.io");
+  const isLocalPreview = hostname === "localhost" || hostname === "127.0.0.1";
+
+  if (isGithubPages || isLocalPreview || statusCode === 404) {
+    return "この表示先では URL 自動読込 API が使えません。Vercel の公開URLで開くか、手入力で補完してください。";
+  }
+
+  return "URL 自動読込 API に接続できませんでした。URL は保持したので、手入力で補完してください。";
 }
 
 function clearImportFields() {
@@ -1639,100 +1582,4 @@ function cleanText(value) {
 
 function normalizeWhitespace(value) {
   return cleanText(value).replace(/\s+/g, " ");
-}
-
-function formatImportedFieldNames(fieldNames) {
-  return fieldNames.map((fieldName) => IMPORT_FIELD_LABELS[fieldName] || fieldName).join(" / ");
-}
-
-function firstMeaningful(values) {
-  return values.find((value) => hasMeaningfulValue(value)) || "";
-}
-
-function removeEmptyFields(object) {
-  return Object.fromEntries(
-    Object.entries(object).filter(([, value]) => hasMeaningfulValue(value))
-  );
-}
-
-function parseJsonLd(documentFromHtml) {
-  const scriptElements = Array.from(documentFromHtml.querySelectorAll('script[type="application/ld+json"]'));
-
-  return scriptElements.flatMap((scriptElement) => {
-    try {
-      const parsed = JSON.parse(scriptElement.textContent || "{}");
-      return Array.isArray(parsed) ? parsed : [parsed];
-    } catch (error) {
-      return [];
-    }
-  });
-}
-
-function extractAddressFromJsonLd(item) {
-  if (!item || !item.address) return "";
-  if (typeof item.address === "string") return cleanText(item.address);
-
-  const parts = [
-    item.address.addressRegion,
-    item.address.addressLocality,
-    item.address.streetAddress,
-  ].filter(Boolean);
-
-  return parts.join("");
-}
-
-function extractBuiltYearFromJsonLd(item) {
-  if (!item) return "";
-  if (item.yearBuilt) return String(item.yearBuilt);
-  if (item.dateCreated) return String(item.dateCreated);
-  return "";
-}
-
-function extractRentFromText(text) {
-  const match = text.match(/(\d{1,3}(?:,\d{3})+|\d{4,6})\s*円/);
-  return match ? Number(match[1].replaceAll(",", "")) : null;
-}
-
-function extractLayoutFromText(text) {
-  const match = text.match(/(ワンルーム|1R|1K|1DK|1LDK|2K|2DK|2LDK|3K|3DK|3LDK|4LDK)/i);
-  return match ? match[1].toUpperCase() : "";
-}
-
-function extractAreaSizeFromText(text) {
-  const match = text.match(/(\d{1,3}(?:\.\d+)?)\s*(?:m2|㎡)/i);
-  return match ? Number(match[1]) : null;
-}
-
-function extractStationInfo(text) {
-  const match = text.match(/([^\s、,]{1,24}?駅)\s*徒歩\s*(\d{1,2})分/);
-  if (!match) {
-    return { station: "", walkMinutes: null };
-  }
-
-  return {
-    station: match[1].replace(/駅$/, ""),
-    walkMinutes: Number(match[2]),
-  };
-}
-
-function matchJapaneseAddress(text) {
-  const match = text.match(/(東京都|神奈川県|千葉県|埼玉県)[^\s]{4,80}/);
-  return match ? match[0] : "";
-}
-
-function extractBuiltYearFromText(text) {
-  const directMatch = text.match(/(20\d{2}年\d{1,2}月|築\d{1,2}年)/);
-  return directMatch ? directMatch[1] : "";
-}
-
-function cleanImportedTitle(title, sourceSite) {
-  if (!title) return "";
-
-  return title
-    .replace(/^\[[^\]]+\]\s*/, "")
-    .replace(/^【[^】]+】\s*/, "")
-    .replace(/\s*[|｜].*$/, "")
-    .replace(/\s*-\s*(SUUMO|HOME'S).*$/i, "")
-    .replace(new RegExp(`\\s*${sourceSite}\\s*$`, "i"), "")
-    .trim();
 }
