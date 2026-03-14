@@ -7,7 +7,7 @@ let supabaseClient = null;
 export function GET() {
   return jsonResponse({
     success: true,
-    message: "POST で connect / fetch / saveSnapshot を送ると、共有ワークスペースを操作できます。",
+    message: "POST で connect / fetch / saveSnapshot を送ると、物件一覧と準備リストの共有ワークスペースを操作できます。",
     configured: hasSupabaseConfig(),
   });
 }
@@ -81,7 +81,13 @@ export async function POST(request) {
 
   try {
     if (action === "connect") {
-      return await handleConnect(supabase, workspace, passphrase, body?.seedProperties);
+      return await handleConnect(
+        supabase,
+        workspace,
+        passphrase,
+        body?.seedProperties,
+        body?.seedPreparationItems
+      );
     }
 
     if (action === "fetch") {
@@ -94,6 +100,7 @@ export async function POST(request) {
         workspace,
         passphrase,
         body?.properties,
+        body?.preparationItems,
         body?.clientRevision
       );
     }
@@ -118,12 +125,13 @@ export async function POST(request) {
   }
 }
 
-async function handleConnect(supabase, workspace, passphrase, seedProperties) {
+async function handleConnect(supabase, workspace, passphrase, seedProperties, seedPreparationItems) {
   const accessHash = hashPassphrase(passphrase);
   const row = await findWorkspaceRow(supabase, workspace);
 
   if (!row) {
     const initialProperties = normalizePropertiesArray(seedProperties);
+    const initialPreparationItems = normalizePreparationItemsArray(seedPreparationItems);
     const now = new Date().toISOString();
     const { data, error } = await supabase
       .from(getTableName())
@@ -131,11 +139,12 @@ async function handleConnect(supabase, workspace, passphrase, seedProperties) {
         slug: workspace,
         access_hash: accessHash,
         properties: initialProperties,
+        preparation_items: initialPreparationItems,
         revision: 1,
         created_at: now,
         updated_at: now,
       })
-      .select("slug, properties, revision, updated_at")
+      .select("slug, properties, preparation_items, revision, updated_at")
       .single();
 
     if (error) {
@@ -145,9 +154,10 @@ async function handleConnect(supabase, workspace, passphrase, seedProperties) {
     return jsonResponse({
       success: true,
       created: true,
-      message: "共有ワークスペースを作成しました。以後は 2 台で同じ物件一覧を見られます。",
+      message: "共有ワークスペースを作成しました。以後は 2 台で同じ物件一覧と準備リストを見られます。",
       workspace,
       properties: normalizePropertiesArray(data?.properties),
+      preparationItems: normalizePreparationItemsArray(data?.preparation_items),
       revision: Number(data?.revision || 1),
       updatedAt: data?.updated_at || now,
     });
@@ -158,9 +168,10 @@ async function handleConnect(supabase, workspace, passphrase, seedProperties) {
   return jsonResponse({
     success: true,
     created: false,
-    message: "共有ワークスペースに接続しました。最新の物件一覧を読み込みました。",
+    message: "共有ワークスペースに接続しました。最新の物件一覧と準備リストを読み込みました。",
     workspace,
     properties: normalizePropertiesArray(row.properties),
+    preparationItems: normalizePreparationItemsArray(row.preparation_items),
     revision: Number(row.revision || 0),
     updatedAt: row.updated_at || "",
   });
@@ -175,12 +186,13 @@ async function handleFetch(supabase, workspace, passphrase) {
     message: "共有データを更新しました。",
     workspace,
     properties: normalizePropertiesArray(row.properties),
+    preparationItems: normalizePreparationItemsArray(row.preparation_items),
     revision: Number(row.revision || 0),
     updatedAt: row.updated_at || "",
   });
 }
 
-async function handleSaveSnapshot(supabase, workspace, passphrase, properties, clientRevision) {
+async function handleSaveSnapshot(supabase, workspace, passphrase, properties, preparationItems, clientRevision) {
   const row = await requireWorkspaceRow(supabase, workspace);
   verifyPassphrase(row, hashPassphrase(passphrase));
 
@@ -200,6 +212,7 @@ async function handleSaveSnapshot(supabase, workspace, passphrase, properties, c
         reason: "revision-conflict",
         workspace,
         properties: normalizePropertiesArray(row.properties),
+        preparationItems: normalizePreparationItemsArray(row.preparation_items),
         revision: currentRevision,
         updatedAt: row.updated_at || "",
       },
@@ -208,17 +221,19 @@ async function handleSaveSnapshot(supabase, workspace, passphrase, properties, c
   }
 
   const nextProperties = normalizePropertiesArray(properties);
+  const nextPreparationItems = normalizePreparationItemsArray(preparationItems);
   const nextRevision = currentRevision + 1;
   const now = new Date().toISOString();
   const { data, error } = await supabase
     .from(getTableName())
     .update({
       properties: nextProperties,
+      preparation_items: nextPreparationItems,
       revision: nextRevision,
       updated_at: now,
     })
     .eq("slug", workspace)
-    .select("slug, properties, revision, updated_at")
+    .select("slug, properties, preparation_items, revision, updated_at")
     .single();
 
   if (error) {
@@ -230,6 +245,7 @@ async function handleSaveSnapshot(supabase, workspace, passphrase, properties, c
     message: "共有データを保存しました。",
     workspace,
     properties: normalizePropertiesArray(data?.properties),
+    preparationItems: normalizePreparationItemsArray(data?.preparation_items),
     revision: Number(data?.revision || nextRevision),
     updatedAt: data?.updated_at || now,
   });
@@ -238,7 +254,7 @@ async function handleSaveSnapshot(supabase, workspace, passphrase, properties, c
 async function findWorkspaceRow(supabase, workspace) {
   const { data, error } = await supabase
     .from(getTableName())
-    .select("slug, access_hash, properties, revision, updated_at")
+    .select("slug, access_hash, properties, preparation_items, revision, updated_at")
     .eq("slug", workspace)
     .maybeSingle();
 
@@ -304,6 +320,10 @@ function normalizeWorkspaceSlug(value) {
 }
 
 function normalizePropertiesArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function normalizePreparationItemsArray(value) {
   return Array.isArray(value) ? value : [];
 }
 

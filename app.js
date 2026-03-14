@@ -308,7 +308,7 @@ const state = {
     passphrase: "",
     revision: 0,
     lastSyncedAt: "",
-    statusMessage: "共有設定を保存すると、2台で同じ物件一覧を見られます。",
+    statusMessage: "共有設定を保存すると、2台で同じ物件一覧と準備リストを見られます。",
     pollTimer: null,
     isSyncing: false,
   },
@@ -471,9 +471,13 @@ async function loadInitialData() {
   loadSharedSyncSettingsFromStorage();
 
   if (hasSharedSyncConfig()) {
-    const connected = await connectSharedWorkspace(state.properties, { silent: true });
+    const connected = await connectSharedWorkspace(state.properties, {
+      silent: true,
+      seedPreparationItems: state.preparationItems,
+    });
     if (!connected) {
       state.properties = loadPropertiesFromStorage();
+      state.preparationItems = loadPreparationItemsFromStorage();
       setLocalSyncStatus("共有に接続できなかったため、この端末の保存データを表示しています。");
     }
     return;
@@ -860,6 +864,7 @@ function renderPreparationUi() {
     filterNotes.push(getPreparationFilterLabel(state.preparation.filter));
   }
   filterNotes.push(getPreparationSortLabel(state.preparation.sort));
+  filterNotes.push(state.sync.mode === "shared" ? "2台で共有中" : "この端末だけ");
   elements.prepFilterSummary.textContent = `${visibleItems.length}件を表示中 / ${filterNotes.join(" / ")}`;
 }
 
@@ -1435,7 +1440,7 @@ function handlePreparationListClick(event) {
   }
 }
 
-function handlePreparationFormSubmit(event) {
+async function handlePreparationFormSubmit(event) {
   event.preventDefault();
 
   if (!elements.prepItemForm.reportValidity()) {
@@ -1463,22 +1468,29 @@ function handlePreparationFormSubmit(event) {
     updatedAt: now,
   });
 
-  state.preparationItems = upsertPreparationItemInList(state.preparationItems, normalizedItem);
-  savePreparationItemsToStorage(state.preparationItems);
+  const persistResult = await persistPreparationItems(
+    upsertPreparationItemInList(state.preparationItems, normalizedItem)
+  );
+  if (!persistResult.ok) {
+    elements.prepFormStatusMessage.textContent = persistResult.message;
+    showAppMessage(persistResult.message, "warning");
+    return;
+  }
+
   closeModal("prepForm");
-  renderPreparationUi();
+  renderAll();
   if (state.ui.activeView !== "prep") {
     switchMainView("prep");
   }
   showAppMessage(existingItem ? "準備項目を更新しました。" : "準備項目を追加しました。", "success");
 }
 
-function handlePreparationDeleteFromModal() {
+async function handlePreparationDeleteFromModal() {
   if (!state.editingPreparationItemId) return;
-  deletePreparationItemById(state.editingPreparationItemId);
+  await deletePreparationItemById(state.editingPreparationItemId);
 }
 
-function updatePreparationStatus(itemId, nextStatus) {
+async function updatePreparationStatus(itemId, nextStatus) {
   const item = findPreparationItemById(itemId);
   if (!item) return;
 
@@ -1491,28 +1503,39 @@ function updatePreparationStatus(itemId, nextStatus) {
     updatedAt: new Date().toISOString(),
   });
 
-  state.preparationItems = upsertPreparationItemInList(state.preparationItems, updatedItem);
-  savePreparationItemsToStorage(state.preparationItems);
-  renderPreparationUi();
+  const persistResult = await persistPreparationItems(
+    upsertPreparationItemInList(state.preparationItems, updatedItem)
+  );
+  if (!persistResult.ok) {
+    showAppMessage(persistResult.message, "warning");
+    return;
+  }
+
+  renderAll();
   showAppMessage(`「${item.itemName}」を ${getPreparationStatusLabel(normalizedStatus)} にしました。`, "success");
 }
 
-function deletePreparationItemById(itemId) {
+async function deletePreparationItemById(itemId) {
   const item = findPreparationItemById(itemId);
   if (!item) return;
 
   const confirmed = window.confirm(`「${item.itemName}」を削除しますか？ この操作は取り消せません。`);
   if (!confirmed) return;
 
-  state.preparationItems = deletePreparationItemFromList(state.preparationItems, itemId);
-  savePreparationItemsToStorage(state.preparationItems);
+  const persistResult = await persistPreparationItems(
+    deletePreparationItemFromList(state.preparationItems, itemId)
+  );
+  if (!persistResult.ok) {
+    showAppMessage(persistResult.message, "warning");
+    return;
+  }
 
   if (state.editingPreparationItemId === itemId) {
     state.editingPreparationItemId = null;
     closeModal("prepForm");
   }
 
-  renderPreparationUi();
+  renderAll();
   showAppMessage("準備項目を削除しました。", "danger");
 }
 
@@ -1674,6 +1697,7 @@ async function handleSettingsSubmit(event) {
     clearSharedSyncSettings();
     setLocalSyncStatus("共有設定を解除しました。現在はこの端末だけに保存します。");
     savePropertiesToStorage(state.properties);
+    savePreparationItemsToStorage(state.preparationItems);
     renderAll();
 
     const shouldReturnToDetail = state.settingsReturnTarget === "detail" && state.selectedPropertyId;
@@ -1693,7 +1717,9 @@ async function handleSettingsSubmit(event) {
   state.sync.workspace = requestedWorkspace;
   state.sync.passphrase = requestedPassphrase;
 
-  const connected = await connectSharedWorkspace(state.properties);
+  const connected = await connectSharedWorkspace(state.properties, {
+    seedPreparationItems: state.preparationItems,
+  });
   if (!connected) {
     elements.settingsSyncStatus.textContent = state.sync.statusMessage;
     renderAll();
@@ -1740,7 +1766,7 @@ function syncSettingsForm() {
   elements.sharedPassphraseInput.value = state.sync.passphrase || "";
   elements.settingsSyncStatus.textContent =
     state.sync.mode === "shared"
-      ? "同じワークスペース名と合言葉を入れた端末同士で、物件一覧を共有しています。"
+      ? "同じワークスペース名と合言葉を入れた端末同士で、物件一覧と準備リストを共有しています。"
       : "共有を使うときは、2台とも同じワークスペース名と合言葉を保存してください。";
 }
 
@@ -2067,7 +2093,7 @@ function clearSharedSyncSettings() {
   state.sync.passphrase = "";
   state.sync.revision = 0;
   state.sync.lastSyncedAt = "";
-  state.sync.statusMessage = "共有設定を保存すると、2台で同じ物件一覧を見られます。";
+  state.sync.statusMessage = "共有設定を保存すると、2台で同じ物件一覧と準備リストを見られます。";
   clearSharedPolling();
   try {
     window.localStorage.removeItem(STORAGE_KEYS.sharedWorkspace);
@@ -2082,7 +2108,10 @@ function hasSharedSyncConfig() {
 }
 
 async function connectSharedWorkspace(seedProperties, options = {}) {
-  const { silent = false } = options;
+  const {
+    silent = false,
+    seedPreparationItems = state.preparationItems,
+  } = options;
 
   if (!hasSharedSyncConfig()) {
     setLocalSyncStatus("共有設定がないため、この端末だけの保存を使っています。");
@@ -2097,6 +2126,7 @@ async function connectSharedWorkspace(seedProperties, options = {}) {
       workspace: state.sync.workspace,
       passphrase: state.sync.passphrase,
       seedProperties: seedProperties.map(normalizeProperty),
+      seedPreparationItems: seedPreparationItems.map(normalizePreparationItem),
     });
 
     applySharedSnapshot(result, result.message);
@@ -2144,7 +2174,7 @@ async function refreshSharedProperties(options = {}) {
     if (manual) {
       renderAll();
       showAppMessage(result.message, "success");
-    } else if (revisionChanged && state.openModal !== "form") {
+    } else if (revisionChanged && !["form", "prepForm"].includes(state.openModal)) {
       renderAll();
     }
 
@@ -2163,11 +2193,28 @@ async function refreshSharedProperties(options = {}) {
 }
 
 async function persistProperties(nextProperties) {
-  const normalizedProperties = nextProperties.map(normalizeProperty);
+  return persistSharedSnapshot({
+    properties: nextProperties,
+    preparationItems: state.preparationItems,
+  });
+}
+
+async function persistPreparationItems(nextPreparationItems) {
+  return persistSharedSnapshot({
+    properties: state.properties,
+    preparationItems: nextPreparationItems,
+  });
+}
+
+async function persistSharedSnapshot({ properties, preparationItems }) {
+  const normalizedProperties = properties.map(normalizeProperty);
+  const normalizedPreparationItems = preparationItems.map(normalizePreparationItem);
 
   if (state.sync.mode !== "shared" || !hasSharedSyncConfig()) {
     state.properties = normalizedProperties;
+    state.preparationItems = normalizedPreparationItems;
     savePropertiesToStorage(normalizedProperties);
+    savePreparationItemsToStorage(normalizedPreparationItems);
     return { ok: true };
   }
 
@@ -2179,6 +2226,7 @@ async function persistProperties(nextProperties) {
       workspace: state.sync.workspace,
       passphrase: state.sync.passphrase,
       properties: normalizedProperties,
+      preparationItems: normalizedPreparationItems,
       clientRevision: state.sync.revision,
     });
 
@@ -2223,7 +2271,7 @@ async function callSharedApi(action, payload) {
   );
   error.reason = result?.reason || "shared-api-error";
 
-  if (result?.properties) {
+  if (result?.properties || result?.preparationItems) {
     error.snapshot = result;
   }
 
@@ -2232,11 +2280,13 @@ async function callSharedApi(action, payload) {
 
 function applySharedSnapshot(snapshot, statusMessage) {
   state.properties = (snapshot.properties || []).map(normalizeProperty);
+  state.preparationItems = (snapshot.preparationItems || []).map(normalizePreparationItem);
   state.sync.mode = "shared";
   state.sync.revision = Number(snapshot.revision || 0);
   state.sync.lastSyncedAt = cleanText(snapshot.updatedAt);
   state.sync.statusMessage = statusMessage || "共有ワークスペースと同期しています。";
   savePropertiesToStorage(state.properties);
+  savePreparationItemsToStorage(state.preparationItems);
 }
 
 function setLocalSyncStatus(message) {
@@ -2250,7 +2300,7 @@ function setLocalSyncStatus(message) {
 function startSharedPolling() {
   clearSharedPolling();
   state.sync.pollTimer = window.setInterval(() => {
-    if (state.sync.mode !== "shared" || state.openModal === "form") {
+    if (state.sync.mode !== "shared" || ["form", "prepForm"].includes(state.openModal)) {
       return;
     }
     refreshSharedProperties({ manual: false });
