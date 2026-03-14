@@ -461,6 +461,7 @@ function cacheElements() {
   elements.prepFormHint = document.getElementById("prepFormHint");
   elements.prepFormStatusMessage = document.getElementById("prepFormStatusMessage");
   elements.savePrepItemButton = document.getElementById("savePrepItemButton");
+  elements.deletePrepItemButton = document.getElementById("deletePrepItemButton");
 }
 
 async function loadInitialData() {
@@ -562,6 +563,7 @@ function bindEvents() {
   document.getElementById("clearImportButton").addEventListener("click", clearImportFields);
   document.getElementById("importFromUrlButton").addEventListener("click", handleImportFromUrl);
   document.getElementById("resetPrepFilterButton").addEventListener("click", resetPreparationFilters);
+  elements.deletePrepItemButton.addEventListener("click", handlePreparationDeleteFromModal);
   elements.manualSyncButton.addEventListener("click", () => {
     refreshSharedProperties({ manual: true });
   });
@@ -590,7 +592,6 @@ function bindEvents() {
   elements.mapCanvas.addEventListener("click", handleMapCanvasClick);
   elements.missingCoordinates.addEventListener("click", handlePropertyListClick);
   elements.prepSection.addEventListener("click", handlePreparationListClick);
-  elements.prepSection.addEventListener("change", handlePreparationListChange);
   elements.quickReviewForm.addEventListener("submit", handleQuickReviewSubmit);
   elements.propertyForm.addEventListener("submit", handlePropertyFormSubmit);
   elements.settingsForm.addEventListener("submit", handleSettingsSubmit);
@@ -858,8 +859,8 @@ function renderPreparationUi() {
   if (state.preparation.filter !== "all") {
     filterNotes.push(getPreparationFilterLabel(state.preparation.filter));
   }
-  filterNotes.push(`並び替え: ${getPreparationSortLabel(state.preparation.sort)}`);
-  elements.prepFilterSummary.textContent = `${state.preparationItems.length}件中 ${visibleItems.length}件を表示中。${filterNotes.join(" / ")}。このリストは今の端末に保存されます。`;
+  filterNotes.push(getPreparationSortLabel(state.preparation.sort));
+  elements.prepFilterSummary.textContent = `${visibleItems.length}件を表示中 / ${filterNotes.join(" / ")}`;
 }
 
 function renderPropertyList() {
@@ -870,52 +871,31 @@ function renderPropertyList() {
 
 function buildPreparationItemCardHtml(item) {
   const status = PREPARATION_STATUS_OPTIONS[item.status];
-  const itemMeta = [
-    `<span class="meta-inline-text">${escapeHtml(getPreparationOwnerLabel(item.ownerType))}</span>`,
-    item.category === "carry"
-      ? `<span class="meta-inline-text">${escapeHtml(getPreparationCarryLabel(item.carryFrom))}</span>`
-      : "",
-    `<span class="meta-inline-text">担当: ${escapeHtml(getPreparationAssignedLabel(item.assignedTo))}</span>`,
-    `<span class="chip ${status.chipClass}">${escapeHtml(status.label)}</span>`,
-    item.note
-      ? `<span class="chip chip-comment">メモあり</span>`
-      : `<span class="chip chip-muted">メモなし</span>`,
-  ].filter(Boolean).join("");
+  const assigneeClass = item.assignedTo === "undecided"
+    ? "is-assignee-undecided"
+    : `chip-user-${item.assignedTo}`;
 
   return `
     <article class="prep-card ${PREPARATION_CATEGORY_OPTIONS[item.category].cardClass}" data-prep-id="${escapeHtml(item.id)}">
-      <div class="prep-card-top">
-        <div class="prep-card-heading">
-          <h3 class="prep-item-title">${escapeHtml(item.itemName)}</h3>
-          <p class="prep-item-caption">${escapeHtml(PREPARATION_CATEGORY_OPTIONS[item.category].label)}</p>
+      <div class="prep-card-main">
+        <h3 class="prep-item-title">${escapeHtml(item.itemName)}</h3>
+        <div class="prep-card-meta">
+          <span class="prep-compact-chip ${item.category === "buy" ? "is-buy" : "is-carry"}">
+            ${escapeHtml(PREPARATION_CATEGORY_OPTIONS[item.category].label)}
+          </span>
+          <span class="prep-compact-chip ${escapeHtml(assigneeClass)}">
+            ${escapeHtml(getPreparationAssignedLabel(item.assignedTo))}
+          </span>
+          <span class="prep-status-badge is-${escapeHtml(item.status)}">
+            ${escapeHtml(status.label)}
+          </span>
         </div>
-        <span class="prep-quantity-chip">数量 ${escapeHtml(formatPreparationQuantity(item.quantity))}</span>
       </div>
 
-      <div class="prep-meta-row">
-        ${itemMeta}
-      </div>
-
-      <div class="prep-card-footer">
-        <label class="field field-compact prep-status-field">
-          <span>進み具合</span>
-          <select data-action="change-prep-status" data-prep-id="${escapeHtml(item.id)}">
-            ${Object.entries(PREPARATION_STATUS_OPTIONS)
-              .map(([statusKey, config]) => `
-                <option value="${statusKey}" ${item.status === statusKey ? "selected" : ""}>${escapeHtml(config.label)}</option>
-              `)
-              .join("")}
-          </select>
-        </label>
-
-        <div class="prep-action-row">
-          <button type="button" class="secondary-button prep-small-button" data-action="edit-prep" data-prep-id="${escapeHtml(item.id)}">
-            編集
-          </button>
-          <button type="button" class="danger-button prep-small-button" data-action="delete-prep" data-prep-id="${escapeHtml(item.id)}">
-            削除
-          </button>
-        </div>
+      <div class="prep-card-actions">
+        <button type="button" class="secondary-button prep-edit-button" data-action="edit-prep" data-prep-id="${escapeHtml(item.id)}">
+          編集
+        </button>
       </div>
     </article>
   `;
@@ -954,7 +934,7 @@ function buildPropertyCardHtml(property) {
       </div>
 
       <div class="card-actions card-actions-compact">
-        <button type="button" class="primary-button" data-action="open-detail" data-property-id="${escapeHtml(property.id)}">
+        <button type="button" class="secondary-button property-detail-button" data-action="open-detail" data-property-id="${escapeHtml(property.id)}">
           詳細を見る
         </button>
       </div>
@@ -1255,9 +1235,11 @@ function openPreparationForm(itemId = null) {
     populatePreparationForm(item);
     elements.prepFormModalTitle.textContent = "項目を編集";
     elements.savePrepItemButton.textContent = "更新する";
+    elements.deletePrepItemButton.classList.remove("hidden");
   } else {
     elements.prepFormModalTitle.textContent = "項目を追加";
     elements.savePrepItemButton.textContent = "保存する";
+    elements.deletePrepItemButton.classList.add("hidden");
   }
 
   syncPreparationCarryFieldVisibility();
@@ -1287,6 +1269,7 @@ function resetPreparationForm() {
   elements.prepStatus.value = "todo";
   elements.prepQuantity.value = "1";
   elements.prepNote.value = "";
+  elements.deletePrepItemButton.classList.add("hidden");
 }
 
 function populatePropertyForm(property) {
@@ -1426,26 +1409,20 @@ async function handlePropertyFormSubmit(event) {
 
 function handlePreparationListClick(event) {
   const actionButton = event.target.closest("[data-action]");
-  if (!actionButton) return;
+  if (!actionButton) {
+    const prepCard = event.target.closest(".prep-card[data-prep-id]");
+    if (prepCard) {
+      openPreparationForm(prepCard.dataset.prepId);
+    }
+    return;
+  }
 
   const { action, prepId } = actionButton.dataset;
   if (!prepId) return;
 
   if (action === "edit-prep") {
     openPreparationForm(prepId);
-    return;
   }
-
-  if (action === "delete-prep") {
-    deletePreparationItemById(prepId);
-  }
-}
-
-function handlePreparationListChange(event) {
-  const actionTarget = event.target.closest("[data-action='change-prep-status']");
-  if (!actionTarget) return;
-
-  updatePreparationStatus(actionTarget.dataset.prepId, actionTarget.value);
 }
 
 function handlePreparationFormSubmit(event) {
@@ -1484,6 +1461,11 @@ function handlePreparationFormSubmit(event) {
     switchMainView("prep");
   }
   showAppMessage(existingItem ? "準備項目を更新しました。" : "準備項目を追加しました。", "success");
+}
+
+function handlePreparationDeleteFromModal() {
+  if (!state.editingPreparationItemId) return;
+  deletePreparationItemById(state.editingPreparationItemId);
 }
 
 function updatePreparationStatus(itemId, nextStatus) {

@@ -314,10 +314,6 @@
           </button>
         </div>
 
-        <p class="helper-text prep-panel-copy">
-          一覧では比較しやすく、編集は最小限の入力で進められる形にしています。
-        </p>
-
         <div id="prepListEmptyState" class="empty-state hidden">
           <h3>条件に合う準備項目がまだありません</h3>
           <p>絞り込みを戻すか、新しい項目を追加してみてください。</p>
@@ -338,7 +334,7 @@
                 <p class="eyebrow">買うもの</p>
                 <h3>購入品</h3>
               </div>
-              <span id="prepBuyCount" class="chip chip-site">0件</span>
+              <span id="prepBuyCount" class="prep-count-mini">0件</span>
             </div>
             <div id="prepBuyList" class="prep-item-list" aria-live="polite"></div>
           </article>
@@ -349,7 +345,7 @@
                 <p class="eyebrow">持っていくもの</p>
                 <h3>持参品</h3>
               </div>
-              <span id="prepCarryCount" class="chip chip-site">0件</span>
+              <span id="prepCarryCount" class="prep-count-mini">0件</span>
             </div>
             <div id="prepCarryList" class="prep-item-list" aria-live="polite"></div>
           </article>
@@ -661,7 +657,7 @@
           ここで選んだ利用者は localStorage に保存されます。あとからいつでも切り替えられます。
         </p>
 
-        <form id="settingsForm" class="settings-form">
+        <form id="settingsForm" class="settings-form has-sticky-footer">
           <section class="settings-block">
             <div class="section-line">
               <h3>現在の利用者</h3>
@@ -722,7 +718,7 @@
             </p>
           </section>
 
-          <div class="button-row end settings-action-row">
+          <div class="button-row end settings-action-row modal-footer-sticky">
             <button type="button" id="closeSettingsButton" class="secondary-button">閉じる</button>
             <button type="submit" id="saveSettingsButton" class="primary-button">
               この人として使う
@@ -751,7 +747,7 @@
           買うものと持っていくものを分けて、担当と進み具合を一緒に管理できます。
         </p>
 
-        <form id="prepItemForm" class="property-form">
+        <form id="prepItemForm" class="property-form has-sticky-footer">
           <div class="form-grid compact-grid">
             <label class="field span-2">
               <span>品名</span>
@@ -817,7 +813,10 @@
             「持っていくもの」を選ぶと、誰が持参するかも保存できます。
           </p>
 
-          <div class="button-row end">
+          <div class="button-row end modal-footer-sticky">
+            <button type="button" id="deletePrepItemButton" class="danger-button hidden">
+              この項目を削除
+            </button>
             <button type="button" id="cancelPrepFormButton" class="secondary-button">閉じる</button>
             <button type="submit" id="savePrepItemButton" class="primary-button">保存する</button>
           </div>
