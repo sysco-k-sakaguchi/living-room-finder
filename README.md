@@ -28,6 +28,9 @@
   - Vercel 上では SUUMO / HOME'S の URL から補助入力を試せます
 - 手入力フォールバック
   - 自動読込に失敗しても、そのまま手入力で登録できます
+- 準備リスト
+  - 買うもの / 持っていくもの を分けて管理できます
+  - 数量、誰のものか、誰が対応するか、進み具合、メモを保存できます
 
 ## 共有の仕組み
 
@@ -56,9 +59,9 @@
 - `index.html`
   - 画面全体の HTML
 - `style.css`
-  - レイアウト、カード、モーダル、レスポンシブ対応の CSS
+  - 物件画面と準備リスト画面、モーダル、レスポンシブ対応の CSS
 - `app.js`
-  - 一覧表示、詳細、追加編集、レビュー、共有同期、URL読込 UI の処理
+  - 一覧表示、詳細、追加編集、レビュー、共有同期、URL読込 UI、準備リストの処理
 - `api/import-property.js`
   - SUUMO / HOME'S の URL を Vercel 側で取得して補助入力する API
 - `api/shared-properties.js`
@@ -94,6 +97,47 @@
 - Vercel = 実運用向け
 
 です。
+
+## 準備リスト機能
+
+`準備リスト` 画面では、同棲に必要なものを次の 2 種類に分けて管理できます。
+
+- 買うもの
+- 持っていくもの
+
+各項目では次の内容を管理できます。
+
+- 品名
+- 分類
+- 誰のものか
+- 誰が持っていくか
+- 誰が対応するか
+- 進み具合
+- 数量
+- メモ
+
+### できること
+
+- 項目の追加
+- 項目の編集
+- 項目の削除
+- ステータスの即時変更
+- 絞り込み
+- 並び替え
+
+### サンプルデータ
+
+初回起動時には、次のようなサンプル項目を自動で入れています。
+
+- 冷蔵庫
+- 洗濯機
+- ベッド
+- 炊飯器
+- ドライヤー
+- 食器棚
+
+物件リストと違って、準備リストは **今のところ localStorage のみ** に保存します。  
+つまり、端末ごとに別保存です。
 
 ## 共有機能を動かすための準備
 
@@ -191,6 +235,8 @@ python3 -m http.server 8000
   - 共有ワークスペース名
 - `living-room-finder.sharedPassphrase`
   - 共有の合言葉
+- `living-room-finder.preparationItems`
+  - 同棲準備リスト
 
 ### Supabase に保存するもの
 
@@ -218,6 +264,7 @@ localStorage.removeItem("living-room-finder.currentUser");
 localStorage.removeItem("living-room-finder.properties");
 localStorage.removeItem("living-room-finder.sharedWorkspace");
 localStorage.removeItem("living-room-finder.sharedPassphrase");
+localStorage.removeItem("living-room-finder.preparationItems");
 location.reload();
 ```
 
@@ -252,6 +299,24 @@ Supabase の `shared_workspaces` テーブルから、対象の `slug` の行を
     keiichi: { rank, comment, updatedAt },
     honoka: { rank, comment, updatedAt }
   }
+}
+```
+
+準備リストの各項目は、`app.js` 内で次の形にそろえています。
+
+```js
+{
+  id,
+  itemName,
+  category,   // buy / carry
+  ownerType,  // common / keiichi / honoka
+  carryFrom,  // undecided / keiichi / honoka
+  assignedTo, // undecided / keiichi / honoka
+  status,     // todo / doing / done
+  quantity,
+  note,
+  createdAt,
+  updatedAt
 }
 ```
 
@@ -315,6 +380,7 @@ API キーは不要ですが、次の制約があります。
 - 合言葉ではなくログインで共有する
 - Row Level Security で、ワークスペースごとの権限を絞る
 - Realtime で一覧更新を即時反映する
+- 準備リストも同じワークスペース単位で共有できるようにする
 
 ### Firebase に移行する案
 

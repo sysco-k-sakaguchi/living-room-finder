@@ -47,7 +47,7 @@
             </button>
           </article>
 
-          <label class="field top-search-field">
+          <label id="topSearchField" class="field top-search-field">
             <span>物件を検索</span>
             <input
               id="searchInput"
@@ -123,6 +123,7 @@
     <nav class="quick-nav" aria-label="主要操作">
       <button type="button" class="quick-nav-button" id="quickNavListButton">一覧</button>
       <button type="button" class="quick-nav-button" id="quickNavMapButton">地図</button>
+      <button type="button" class="quick-nav-button" id="quickNavPrepButton">準備</button>
       <button type="button" class="quick-nav-button quick-nav-button-accent" id="openAddFromNavButton">
         追加
       </button>
@@ -132,7 +133,7 @@
     </nav>
 
     <main class="dashboard">
-      <section class="controls-panel">
+      <section id="propertyControlsPanel" class="controls-panel">
         <div class="controls-shell">
           <div class="panel-heading controls-heading">
             <div>
@@ -142,6 +143,7 @@
             <div class="view-switcher" role="tablist" aria-label="表示切り替え">
               <button type="button" id="showListViewButton" class="view-switch-button">一覧</button>
               <button type="button" id="showMapViewButton" class="view-switch-button">地図</button>
+              <button type="button" id="showPrepViewButton" class="view-switch-button">準備</button>
             </div>
           </div>
 
@@ -214,6 +216,51 @@
         <p id="filterSummary" class="helper-text">物件を読み込み中です。</p>
       </section>
 
+      <section id="prepControlsPanel" class="controls-panel hidden">
+        <div class="controls-shell">
+          <div class="panel-heading controls-heading">
+            <div>
+              <p class="eyebrow">同棲準備</p>
+              <h2>買うものと持っていくものを軽く整理する</h2>
+            </div>
+            <button type="button" id="openPrepFormButton" class="primary-button">
+              項目を追加
+            </button>
+          </div>
+
+          <div class="controls-toolbar prep-toolbar">
+            <label class="field field-compact sort-field">
+              <span>絞り込み</span>
+              <select id="prepFilterSelect">
+                <option value="all">すべて</option>
+                <option value="todo">未対応</option>
+                <option value="doing">対応中</option>
+                <option value="done">完了</option>
+                <option value="keiichiRelated">けいいち関連</option>
+                <option value="honokaRelated">ほのか関連</option>
+                <option value="buyOnly">買うものだけ</option>
+                <option value="carryOnly">持っていくものだけ</option>
+              </select>
+            </label>
+
+            <label class="field field-compact sort-field">
+              <span>並び替え</span>
+              <select id="prepSortSelect">
+                <option value="createdDesc">新しい順</option>
+                <option value="updatedDesc">更新が新しい順</option>
+                <option value="unfinishedFirst">未対応を上にする</option>
+                <option value="completedLast">完了を下にする</option>
+                <option value="nameAsc">名前順</option>
+              </select>
+            </label>
+          </div>
+
+          <p id="prepFilterSummary" class="helper-text">
+            準備リストはこの端末の localStorage に保存されます。
+          </p>
+        </div>
+      </section>
+
       <section id="listSection" class="panel list-panel view-panel">
         <div class="panel-heading">
           <div>
@@ -254,6 +301,59 @@
           緯度・経度がある物件だけを OpenStreetMap 上に表示します。
         </p>
         <div id="missingCoordinates" class="missing-coordinates"></div>
+      </section>
+
+      <section id="prepSection" class="panel prep-panel view-panel hidden">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">準備リスト</p>
+            <h2>同棲に必要なもの</h2>
+          </div>
+          <button type="button" id="openPrepFormInlineButton" class="secondary-button">
+            項目を追加
+          </button>
+        </div>
+
+        <p class="helper-text prep-panel-copy">
+          一覧では比較しやすく、編集は最小限の入力で進められる形にしています。
+        </p>
+
+        <div id="prepListEmptyState" class="empty-state hidden">
+          <h3>条件に合う準備項目がまだありません</h3>
+          <p>絞り込みを戻すか、新しい項目を追加してみてください。</p>
+          <div class="button-row">
+            <button type="button" id="resetPrepFilterButton" class="secondary-button">
+              絞り込みを戻す
+            </button>
+            <button type="button" id="emptyAddPrepButton" class="primary-button">
+              項目を追加
+            </button>
+          </div>
+        </div>
+
+        <div class="prep-section-grid">
+          <article class="prep-group-card">
+            <div class="section-line">
+              <div>
+                <p class="eyebrow">買うもの</p>
+                <h3>購入品</h3>
+              </div>
+              <span id="prepBuyCount" class="chip chip-site">0件</span>
+            </div>
+            <div id="prepBuyList" class="prep-item-list" aria-live="polite"></div>
+          </article>
+
+          <article class="prep-group-card">
+            <div class="section-line">
+              <div>
+                <p class="eyebrow">持っていくもの</p>
+                <h3>持参品</h3>
+              </div>
+              <span id="prepCarryCount" class="chip chip-site">0件</span>
+            </div>
+            <div id="prepCarryList" class="prep-item-list" aria-live="polite"></div>
+          </article>
+        </div>
       </section>
     </main>
   </div>
@@ -628,6 +728,101 @@
               この人として使う
             </button>
           </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div id="prepFormModal" class="modal hidden" aria-hidden="true">
+    <div class="modal-backdrop" data-close-modal="prepForm"></div>
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="prepFormModalTitle">
+      <div class="modal-header">
+        <div>
+          <p class="eyebrow">準備リスト</p>
+          <h2 id="prepFormModalTitle">項目を追加</h2>
+        </div>
+        <button type="button" class="icon-button" data-close-modal="prepForm" aria-label="準備リスト入力を閉じる">
+          閉じる
+        </button>
+      </div>
+
+      <div class="modal-body">
+        <p class="helper-text">
+          買うものと持っていくものを分けて、担当と進み具合を一緒に管理できます。
+        </p>
+
+        <form id="prepItemForm" class="property-form">
+          <div class="form-grid compact-grid">
+            <label class="field span-2">
+              <span>品名</span>
+              <input id="prepItemName" type="text" required placeholder="例: 冷蔵庫">
+            </label>
+
+            <label class="field">
+              <span>分類</span>
+              <select id="prepCategory">
+                <option value="buy">買うもの</option>
+                <option value="carry">持っていくもの</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>誰のものか</span>
+              <select id="prepOwnerType">
+                <option value="common">共通</option>
+                <option value="keiichi">けいいち</option>
+                <option value="honoka">ほのか</option>
+              </select>
+            </label>
+
+            <label id="prepCarryFromField" class="field">
+              <span>誰が持っていくか</span>
+              <select id="prepCarryFrom">
+                <option value="undecided">未定</option>
+                <option value="keiichi">けいいち</option>
+                <option value="honoka">ほのか</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>誰が対応するか</span>
+              <select id="prepAssignedTo">
+                <option value="undecided">未定</option>
+                <option value="keiichi">けいいち</option>
+                <option value="honoka">ほのか</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>進み具合</span>
+              <select id="prepStatus">
+                <option value="todo">未対応</option>
+                <option value="doing">対応中</option>
+                <option value="done">完了</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>数量</span>
+              <input id="prepQuantity" type="number" min="1" step="1" placeholder="1">
+            </label>
+
+            <label class="field span-2">
+              <span>メモ</span>
+              <textarea id="prepNote" rows="4" placeholder="サイズ、優先度、引っ越し前にやることなど"></textarea>
+            </label>
+          </div>
+
+          <p id="prepFormHint" class="helper-text">
+            「持っていくもの」を選ぶと、誰が持参するかも保存できます。
+          </p>
+
+          <div class="button-row end">
+            <button type="button" id="cancelPrepFormButton" class="secondary-button">閉じる</button>
+            <button type="submit" id="savePrepItemButton" class="primary-button">保存する</button>
+          </div>
+
+          <p id="prepFormStatusMessage" class="helper-text" aria-live="polite"></p>
         </form>
       </div>
     </div>

@@ -1,6 +1,7 @@
 const STORAGE_KEYS = {
   currentUser: "living-room-finder.currentUser",
   properties: "living-room-finder.properties",
+  preparationItems: "living-room-finder.preparationItems",
   sharedWorkspace: "living-room-finder.sharedWorkspace",
   sharedPassphrase: "living-room-finder.sharedPassphrase",
 };
@@ -26,6 +27,45 @@ const USER_OPTIONS = {
 
 const USER_IDS = Object.keys(USER_OPTIONS);
 const RANK_SCORES = { "": 0, C: 1, B: 2, A: 3, S: 4 };
+const PREPARATION_CATEGORY_OPTIONS = {
+  buy: {
+    label: "買うもの",
+    heading: "購入品",
+    cardClass: "prep-card-buy",
+  },
+  carry: {
+    label: "持っていくもの",
+    heading: "持参品",
+    cardClass: "prep-card-carry",
+  },
+};
+const PREPARATION_STATUS_OPTIONS = {
+  todo: {
+    label: "未対応",
+    order: 0,
+    chipClass: "chip-status-todo",
+  },
+  doing: {
+    label: "対応中",
+    order: 1,
+    chipClass: "chip-status-doing",
+  },
+  done: {
+    label: "完了",
+    order: 2,
+    chipClass: "chip-status-done",
+  },
+};
+const PREPARATION_OWNER_OPTIONS = {
+  common: "共通",
+  keiichi: "けいいち",
+  honoka: "ほのか",
+};
+const PREPARATION_ASSIGNEE_OPTIONS = {
+  undecided: "未定",
+  keiichi: "けいいち",
+  honoka: "ほのか",
+};
 const SAMPLE_PROPERTIES = [
   {
     id: "sample-001",
@@ -152,10 +192,91 @@ const SAMPLE_PROPERTIES = [
     },
   },
 ];
+const SAMPLE_PREPARATION_ITEMS = [
+  {
+    id: "prep-sample-001",
+    itemName: "冷蔵庫",
+    category: "buy",
+    ownerType: "common",
+    carryFrom: "undecided",
+    assignedTo: "undecided",
+    status: "todo",
+    quantity: 1,
+    note: "サイズは物件が決まってから確認する",
+    createdAt: "2026-03-03T18:00:00+09:00",
+    updatedAt: "2026-03-03T18:00:00+09:00",
+  },
+  {
+    id: "prep-sample-002",
+    itemName: "洗濯機",
+    category: "buy",
+    ownerType: "common",
+    carryFrom: "undecided",
+    assignedTo: "keiichi",
+    status: "doing",
+    quantity: 1,
+    note: "ドラム式まで見るかは予算次第",
+    createdAt: "2026-03-04T11:20:00+09:00",
+    updatedAt: "2026-03-08T20:30:00+09:00",
+  },
+  {
+    id: "prep-sample-003",
+    itemName: "ベッド",
+    category: "buy",
+    ownerType: "common",
+    carryFrom: "undecided",
+    assignedTo: "honoka",
+    status: "todo",
+    quantity: 1,
+    note: "",
+    createdAt: "2026-03-05T08:30:00+09:00",
+    updatedAt: "2026-03-05T08:30:00+09:00",
+  },
+  {
+    id: "prep-sample-004",
+    itemName: "炊飯器",
+    category: "carry",
+    ownerType: "keiichi",
+    carryFrom: "keiichi",
+    assignedTo: "keiichi",
+    status: "done",
+    quantity: 1,
+    note: "今のものをそのまま持っていく",
+    createdAt: "2026-03-02T09:00:00+09:00",
+    updatedAt: "2026-03-07T12:30:00+09:00",
+  },
+  {
+    id: "prep-sample-005",
+    itemName: "ドライヤー",
+    category: "carry",
+    ownerType: "honoka",
+    carryFrom: "honoka",
+    assignedTo: "honoka",
+    status: "done",
+    quantity: 1,
+    note: "",
+    createdAt: "2026-03-02T09:10:00+09:00",
+    updatedAt: "2026-03-07T12:35:00+09:00",
+  },
+  {
+    id: "prep-sample-006",
+    itemName: "食器棚",
+    category: "buy",
+    ownerType: "common",
+    carryFrom: "undecided",
+    assignedTo: "undecided",
+    status: "todo",
+    quantity: 1,
+    note: "横幅は 90cm 以内で探したい",
+    createdAt: "2026-03-06T19:40:00+09:00",
+    updatedAt: "2026-03-06T19:40:00+09:00",
+  },
+];
 
 const state = {
   currentUser: null,
   properties: [],
+  preparationItems: [],
   filters: {
     search: "",
     sort: "createdDesc",
@@ -165,8 +286,13 @@ const state = {
     maxRent: "",
     maxWalk: "",
   },
+  preparation: {
+    filter: "all",
+    sort: "createdDesc",
+  },
   selectedPropertyId: null,
   editingPropertyId: null,
+  editingPreparationItemId: null,
   openModal: null,
   settingsReturnTarget: null,
   map: null,
@@ -213,6 +339,8 @@ async function initializeApp() {
 
 function cacheElements() {
   elements.appMessage = document.getElementById("appMessage");
+  elements.openPrimaryAddButton = document.getElementById("openPropertyFormButton");
+  elements.topSearchField = document.getElementById("topSearchField");
   elements.activeUserName = document.getElementById("activeUserName");
   elements.activeUserHint = document.getElementById("activeUserHint");
   elements.syncModeLabel = document.getElementById("syncModeLabel");
@@ -228,10 +356,15 @@ function cacheElements() {
   elements.filterSummary = document.getElementById("filterSummary");
   elements.toggleFiltersButton = document.getElementById("toggleFiltersButton");
   elements.filtersPanel = document.getElementById("filtersPanel");
+  elements.propertyControlsPanel = document.getElementById("propertyControlsPanel");
+  elements.prepControlsPanel = document.getElementById("prepControlsPanel");
   elements.showListViewButton = document.getElementById("showListViewButton");
   elements.showMapViewButton = document.getElementById("showMapViewButton");
+  elements.showPrepViewButton = document.getElementById("showPrepViewButton");
   elements.quickNavListButton = document.getElementById("quickNavListButton");
   elements.quickNavMapButton = document.getElementById("quickNavMapButton");
+  elements.quickNavPrepButton = document.getElementById("quickNavPrepButton");
+  elements.openAddFromNavButton = document.getElementById("openAddFromNavButton");
 
   elements.searchInput = document.getElementById("searchInput");
   elements.sortSelect = document.getElementById("sortSelect");
@@ -245,13 +378,23 @@ function cacheElements() {
   elements.emptyState = document.getElementById("emptyState");
   elements.listSection = document.getElementById("listSection");
   elements.mapSection = document.getElementById("mapSection");
+  elements.prepSection = document.getElementById("prepSection");
   elements.mapCanvas = document.getElementById("mapCanvas");
   elements.mapStatusText = document.getElementById("mapStatusText");
   elements.missingCoordinates = document.getElementById("missingCoordinates");
+  elements.prepFilterSelect = document.getElementById("prepFilterSelect");
+  elements.prepSortSelect = document.getElementById("prepSortSelect");
+  elements.prepFilterSummary = document.getElementById("prepFilterSummary");
+  elements.prepBuyList = document.getElementById("prepBuyList");
+  elements.prepCarryList = document.getElementById("prepCarryList");
+  elements.prepBuyCount = document.getElementById("prepBuyCount");
+  elements.prepCarryCount = document.getElementById("prepCarryCount");
+  elements.prepListEmptyState = document.getElementById("prepListEmptyState");
 
   elements.detailModal = document.getElementById("detailModal");
   elements.formModal = document.getElementById("formModal");
   elements.settingsModal = document.getElementById("settingsModal");
+  elements.prepFormModal = document.getElementById("prepFormModal");
 
   elements.detailPropertyTitle = document.getElementById("detailPropertyTitle");
   elements.detailBadges = document.getElementById("detailBadges");
@@ -303,11 +446,27 @@ function cacheElements() {
   elements.sharedWorkspaceInput = document.getElementById("sharedWorkspaceInput");
   elements.sharedPassphraseInput = document.getElementById("sharedPassphraseInput");
   elements.settingsSyncStatus = document.getElementById("settingsSyncStatus");
+
+  elements.prepItemForm = document.getElementById("prepItemForm");
+  elements.prepFormModalTitle = document.getElementById("prepFormModalTitle");
+  elements.prepItemName = document.getElementById("prepItemName");
+  elements.prepCategory = document.getElementById("prepCategory");
+  elements.prepOwnerType = document.getElementById("prepOwnerType");
+  elements.prepCarryFromField = document.getElementById("prepCarryFromField");
+  elements.prepCarryFrom = document.getElementById("prepCarryFrom");
+  elements.prepAssignedTo = document.getElementById("prepAssignedTo");
+  elements.prepStatus = document.getElementById("prepStatus");
+  elements.prepQuantity = document.getElementById("prepQuantity");
+  elements.prepNote = document.getElementById("prepNote");
+  elements.prepFormHint = document.getElementById("prepFormHint");
+  elements.prepFormStatusMessage = document.getElementById("prepFormStatusMessage");
+  elements.savePrepItemButton = document.getElementById("savePrepItemButton");
 }
 
 async function loadInitialData() {
   state.currentUser = loadCurrentUserFromStorage();
   state.properties = loadPropertiesFromStorage();
+  state.preparationItems = loadPreparationItemsFromStorage();
   loadSharedSyncSettingsFromStorage();
 
   if (hasSharedSyncConfig()) {
@@ -324,8 +483,6 @@ async function loadInitialData() {
 
 function bindEvents() {
   const openFormButtons = [
-    "openPropertyFormButton",
-    "openAddFromNavButton",
     "openAddInlineButton",
     "emptyAddPropertyButton",
   ];
@@ -333,6 +490,22 @@ function bindEvents() {
     const button = document.getElementById(id);
     if (button) {
       button.addEventListener("click", () => openPropertyForm());
+    }
+  });
+
+  [elements.openPrimaryAddButton, elements.openAddFromNavButton].forEach((button) => {
+    if (button) {
+      button.addEventListener("click", openAddForCurrentView);
+    }
+  });
+
+  [
+    document.getElementById("openPrepFormButton"),
+    document.getElementById("openPrepFormInlineButton"),
+    document.getElementById("emptyAddPrepButton"),
+  ].forEach((button) => {
+    if (button) {
+      button.addEventListener("click", () => openPreparationForm());
     }
   });
 
@@ -366,6 +539,15 @@ function bindEvents() {
     }
   });
 
+  [
+    elements.showPrepViewButton,
+    elements.quickNavPrepButton,
+  ].forEach((button) => {
+    if (button) {
+      button.addEventListener("click", () => switchMainView("prep", { scroll: true }));
+    }
+  });
+
   document.getElementById("openSettingsFromDetailButton").addEventListener("click", () => {
     closeModal("detail");
     openSettingsModal("detail");
@@ -375,9 +557,11 @@ function bindEvents() {
   document.getElementById("emptyResetFiltersButton").addEventListener("click", resetFilters);
   elements.toggleFiltersButton.addEventListener("click", toggleFiltersPanel);
   document.getElementById("cancelFormButton").addEventListener("click", () => closeModal("form"));
+  document.getElementById("cancelPrepFormButton").addEventListener("click", () => closeModal("prepForm"));
   document.getElementById("closeSettingsButton").addEventListener("click", closeSettingsFlow);
   document.getElementById("clearImportButton").addEventListener("click", clearImportFields);
   document.getElementById("importFromUrlButton").addEventListener("click", handleImportFromUrl);
+  document.getElementById("resetPrepFilterButton").addEventListener("click", resetPreparationFilters);
   elements.manualSyncButton.addEventListener("click", () => {
     refreshSharedProperties({ manual: true });
   });
@@ -398,12 +582,20 @@ function bindEvents() {
     }
   });
 
+  [elements.prepFilterSelect, elements.prepSortSelect].forEach((input) => {
+    input.addEventListener("change", handlePreparationFilterChange);
+  });
+
   elements.propertyList.addEventListener("click", handlePropertyListClick);
   elements.mapCanvas.addEventListener("click", handleMapCanvasClick);
   elements.missingCoordinates.addEventListener("click", handlePropertyListClick);
+  elements.prepSection.addEventListener("click", handlePreparationListClick);
+  elements.prepSection.addEventListener("change", handlePreparationListChange);
   elements.quickReviewForm.addEventListener("submit", handleQuickReviewSubmit);
   elements.propertyForm.addEventListener("submit", handlePropertyFormSubmit);
   elements.settingsForm.addEventListener("submit", handleSettingsSubmit);
+  elements.prepItemForm.addEventListener("submit", handlePreparationFormSubmit);
+  elements.prepCategory.addEventListener("change", syncPreparationCarryFieldVisibility);
 
   elements.detailEditButton.addEventListener("click", () => {
     if (state.selectedPropertyId) {
@@ -457,6 +649,12 @@ function handleFilterChange() {
   renderAll();
 }
 
+function handlePreparationFilterChange() {
+  state.preparation.filter = elements.prepFilterSelect.value;
+  state.preparation.sort = elements.prepSortSelect.value;
+  renderPreparationUi();
+}
+
 function resetFilters() {
   elements.searchInput.value = "";
   elements.sortSelect.value = "createdDesc";
@@ -469,11 +667,19 @@ function resetFilters() {
   showAppMessage("絞り込み条件をクリアしました。", "success");
 }
 
+function resetPreparationFilters() {
+  elements.prepFilterSelect.value = "all";
+  elements.prepSortSelect.value = "createdDesc";
+  handlePreparationFilterChange();
+  showAppMessage("準備リストの絞り込みを戻しました。", "success");
+}
+
 function renderAll() {
   renderCurrentUserArea();
   renderSyncStatus();
   renderOverview();
   renderFilterUi();
+  renderPreparationUi();
   renderViewState();
   renderPropertyList();
   renderMap();
@@ -521,6 +727,14 @@ function syncOpenModalContent() {
     } else {
       closeModal("detail");
     }
+    return;
+  }
+
+  if (state.openModal === "prepForm" && state.editingPreparationItemId) {
+    const item = findPreparationItemById(state.editingPreparationItemId);
+    if (!item) {
+      closeModal("prepForm");
+    }
   }
 }
 
@@ -561,14 +775,28 @@ function renderFilterUi() {
 
 function renderViewState() {
   const isListView = state.ui.activeView === "list";
+  const isMapView = state.ui.activeView === "map";
+  const isPrepView = state.ui.activeView === "prep";
+
   elements.listSection.classList.toggle("hidden", !isListView);
-  elements.mapSection.classList.toggle("hidden", isListView);
+  elements.mapSection.classList.toggle("hidden", !isMapView);
+  elements.prepSection.classList.toggle("hidden", !isPrepView);
+  elements.propertyControlsPanel.classList.toggle("hidden", isPrepView);
+  elements.prepControlsPanel.classList.toggle("hidden", !isPrepView);
+  elements.topSearchField.classList.toggle("hidden", isPrepView);
+
   syncViewButtonState(elements.showListViewButton, isListView);
   syncViewButtonState(elements.quickNavListButton, isListView);
-  syncViewButtonState(elements.showMapViewButton, !isListView);
-  syncViewButtonState(elements.quickNavMapButton, !isListView);
+  syncViewButtonState(elements.showMapViewButton, isMapView);
+  syncViewButtonState(elements.quickNavMapButton, isMapView);
+  syncViewButtonState(elements.showPrepViewButton, isPrepView);
+  syncViewButtonState(elements.quickNavPrepButton, isPrepView);
 
-  if (!isListView) {
+  if (elements.openPrimaryAddButton) {
+    elements.openPrimaryAddButton.textContent = isPrepView ? "準備を追加" : "物件を追加";
+  }
+
+  if (isMapView) {
     invalidateMapSoon();
   }
 }
@@ -585,11 +813,15 @@ function toggleFiltersPanel() {
 }
 
 function switchMainView(viewName, options = {}) {
-  state.ui.activeView = viewName === "map" ? "map" : "list";
+  state.ui.activeView = ["map", "prep"].includes(viewName) ? viewName : "list";
   renderViewState();
 
   if (options.scroll) {
-    const target = state.ui.activeView === "map" ? elements.mapSection : elements.listSection;
+    const target = state.ui.activeView === "map"
+      ? elements.mapSection
+      : state.ui.activeView === "prep"
+        ? elements.prepSection
+        : elements.listSection;
     target.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 }
@@ -605,10 +837,96 @@ function getAppliedFilterCount() {
   return count;
 }
 
+function renderPreparationUi() {
+  const visibleItems = getVisiblePreparationItems();
+  const buyItems = visibleItems.filter((item) => item.category === "buy");
+  const carryItems = visibleItems.filter((item) => item.category === "carry");
+
+  elements.prepFilterSelect.value = state.preparation.filter;
+  elements.prepSortSelect.value = state.preparation.sort;
+  elements.prepBuyCount.textContent = `${buyItems.length}件`;
+  elements.prepCarryCount.textContent = `${carryItems.length}件`;
+  elements.prepBuyList.innerHTML = buyItems.length
+    ? buyItems.map(buildPreparationItemCardHtml).join("")
+    : buildPreparationEmptyCategoryHtml("買うものはまだありません。");
+  elements.prepCarryList.innerHTML = carryItems.length
+    ? carryItems.map(buildPreparationItemCardHtml).join("")
+    : buildPreparationEmptyCategoryHtml("持っていくものはまだありません。");
+  elements.prepListEmptyState.classList.toggle("hidden", visibleItems.length !== 0);
+
+  const filterNotes = [];
+  if (state.preparation.filter !== "all") {
+    filterNotes.push(getPreparationFilterLabel(state.preparation.filter));
+  }
+  filterNotes.push(`並び替え: ${getPreparationSortLabel(state.preparation.sort)}`);
+  elements.prepFilterSummary.textContent = `${state.preparationItems.length}件中 ${visibleItems.length}件を表示中。${filterNotes.join(" / ")}。このリストは今の端末に保存されます。`;
+}
+
 function renderPropertyList() {
   const visibleProperties = getVisibleProperties();
   elements.propertyList.innerHTML = visibleProperties.map(buildPropertyCardHtml).join("");
   elements.emptyState.classList.toggle("hidden", visibleProperties.length !== 0);
+}
+
+function buildPreparationItemCardHtml(item) {
+  const status = PREPARATION_STATUS_OPTIONS[item.status];
+  const itemMeta = [
+    `<span class="meta-inline-text">${escapeHtml(getPreparationOwnerLabel(item.ownerType))}</span>`,
+    item.category === "carry"
+      ? `<span class="meta-inline-text">${escapeHtml(getPreparationCarryLabel(item.carryFrom))}</span>`
+      : "",
+    `<span class="meta-inline-text">担当: ${escapeHtml(getPreparationAssignedLabel(item.assignedTo))}</span>`,
+    `<span class="chip ${status.chipClass}">${escapeHtml(status.label)}</span>`,
+    item.note
+      ? `<span class="chip chip-comment">メモあり</span>`
+      : `<span class="chip chip-muted">メモなし</span>`,
+  ].filter(Boolean).join("");
+
+  return `
+    <article class="prep-card ${PREPARATION_CATEGORY_OPTIONS[item.category].cardClass}" data-prep-id="${escapeHtml(item.id)}">
+      <div class="prep-card-top">
+        <div class="prep-card-heading">
+          <h3 class="prep-item-title">${escapeHtml(item.itemName)}</h3>
+          <p class="prep-item-caption">${escapeHtml(PREPARATION_CATEGORY_OPTIONS[item.category].label)}</p>
+        </div>
+        <span class="prep-quantity-chip">数量 ${escapeHtml(formatPreparationQuantity(item.quantity))}</span>
+      </div>
+
+      <div class="prep-meta-row">
+        ${itemMeta}
+      </div>
+
+      <div class="prep-card-footer">
+        <label class="field field-compact prep-status-field">
+          <span>進み具合</span>
+          <select data-action="change-prep-status" data-prep-id="${escapeHtml(item.id)}">
+            ${Object.entries(PREPARATION_STATUS_OPTIONS)
+              .map(([statusKey, config]) => `
+                <option value="${statusKey}" ${item.status === statusKey ? "selected" : ""}>${escapeHtml(config.label)}</option>
+              `)
+              .join("")}
+          </select>
+        </label>
+
+        <div class="prep-action-row">
+          <button type="button" class="secondary-button prep-small-button" data-action="edit-prep" data-prep-id="${escapeHtml(item.id)}">
+            編集
+          </button>
+          <button type="button" class="danger-button prep-small-button" data-action="delete-prep" data-prep-id="${escapeHtml(item.id)}">
+            削除
+          </button>
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+function buildPreparationEmptyCategoryHtml(message) {
+  return `
+    <div class="prep-empty-card">
+      <p class="helper-text">${escapeHtml(message)}</p>
+    </div>
+  `;
 }
 
 function buildPropertyCardHtml(property) {
@@ -899,6 +1217,14 @@ async function handleQuickReviewSubmit(event) {
   showAppMessage(`${getUserLabel(state.currentUser)}のレビューを保存しました。`, "success");
 }
 
+function openAddForCurrentView() {
+  if (state.ui.activeView === "prep") {
+    openPreparationForm();
+    return;
+  }
+  openPropertyForm();
+}
+
 function openPropertyForm(propertyId = null) {
   state.editingPropertyId = propertyId;
   resetPropertyForm();
@@ -919,6 +1245,25 @@ function openPropertyForm(propertyId = null) {
   openModal("form");
 }
 
+function openPreparationForm(itemId = null) {
+  state.editingPreparationItemId = itemId;
+  resetPreparationForm();
+
+  if (itemId) {
+    const item = findPreparationItemById(itemId);
+    if (!item) return;
+    populatePreparationForm(item);
+    elements.prepFormModalTitle.textContent = "項目を編集";
+    elements.savePrepItemButton.textContent = "更新する";
+  } else {
+    elements.prepFormModalTitle.textContent = "項目を追加";
+    elements.savePrepItemButton.textContent = "保存する";
+  }
+
+  syncPreparationCarryFieldVisibility();
+  openModal("prepForm");
+}
+
 function resetPropertyForm() {
   elements.propertyForm.reset();
   elements.formStatusMessage.textContent = "";
@@ -929,6 +1274,19 @@ function resetPropertyForm() {
   elements.propertyAddedBy.value = state.currentUser || "keiichi";
   elements.formReviewRank.value = "";
   elements.formReviewComment.value = "";
+}
+
+function resetPreparationForm() {
+  elements.prepItemForm.reset();
+  elements.prepFormStatusMessage.textContent = "";
+  elements.prepItemName.value = "";
+  elements.prepCategory.value = "buy";
+  elements.prepOwnerType.value = "common";
+  elements.prepCarryFrom.value = "undecided";
+  elements.prepAssignedTo.value = "undecided";
+  elements.prepStatus.value = "todo";
+  elements.prepQuantity.value = "1";
+  elements.prepNote.value = "";
 }
 
 function populatePropertyForm(property) {
@@ -951,6 +1309,30 @@ function populatePropertyForm(property) {
   elements.importStatusMessage.textContent = property.url
     ? "既存の URL を読み込んでいます。必要なら再度 URL から自動読込を試せます。"
     : "この物件は URL なしで保存されています。";
+}
+
+function populatePreparationForm(item) {
+  elements.prepItemName.value = item.itemName;
+  elements.prepCategory.value = item.category;
+  elements.prepOwnerType.value = item.ownerType;
+  elements.prepCarryFrom.value = item.category === "carry" ? item.carryFrom : "undecided";
+  elements.prepAssignedTo.value = item.assignedTo;
+  elements.prepStatus.value = item.status;
+  elements.prepQuantity.value = String(item.quantity);
+  elements.prepNote.value = item.note;
+}
+
+function syncPreparationCarryFieldVisibility() {
+  const isCarryItem = elements.prepCategory.value === "carry";
+  elements.prepCarryFromField.classList.toggle("hidden", !isCarryItem);
+  elements.prepCarryFrom.disabled = !isCarryItem;
+  if (!isCarryItem) {
+    elements.prepCarryFrom.value = "undecided";
+    elements.prepFormHint.textContent = "買うものは、担当と進み具合だけ決めれば保存できます。";
+    return;
+  }
+
+  elements.prepFormHint.textContent = "持っていくものは、誰が持参するかも一緒にメモしておけます。";
 }
 
 function renderPropertyFormReviewArea() {
@@ -1040,6 +1422,106 @@ async function handlePropertyFormSubmit(event) {
   renderAll();
   openPropertyDetail(normalizedProperty.id);
   showAppMessage(existingProperty ? "物件情報を更新しました。" : "新しい物件を追加しました。", "success");
+}
+
+function handlePreparationListClick(event) {
+  const actionButton = event.target.closest("[data-action]");
+  if (!actionButton) return;
+
+  const { action, prepId } = actionButton.dataset;
+  if (!prepId) return;
+
+  if (action === "edit-prep") {
+    openPreparationForm(prepId);
+    return;
+  }
+
+  if (action === "delete-prep") {
+    deletePreparationItemById(prepId);
+  }
+}
+
+function handlePreparationListChange(event) {
+  const actionTarget = event.target.closest("[data-action='change-prep-status']");
+  if (!actionTarget) return;
+
+  updatePreparationStatus(actionTarget.dataset.prepId, actionTarget.value);
+}
+
+function handlePreparationFormSubmit(event) {
+  event.preventDefault();
+
+  if (!elements.prepItemForm.reportValidity()) {
+    elements.prepFormStatusMessage.textContent = "入力内容を確認してください。";
+    return;
+  }
+
+  const existingItem = state.editingPreparationItemId
+    ? findPreparationItemById(state.editingPreparationItemId)
+    : null;
+  const now = new Date().toISOString();
+  const normalizedItem = normalizePreparationItem({
+    id: existingItem ? existingItem.id : createPreparationItemId(),
+    itemName: cleanText(elements.prepItemName.value),
+    category: normalizePreparationCategory(elements.prepCategory.value),
+    ownerType: normalizePreparationOwnerType(elements.prepOwnerType.value),
+    carryFrom: elements.prepCategory.value === "carry"
+      ? normalizePreparationAssignee(elements.prepCarryFrom.value)
+      : "undecided",
+    assignedTo: normalizePreparationAssignee(elements.prepAssignedTo.value),
+    status: normalizePreparationStatus(elements.prepStatus.value),
+    quantity: normalizePreparationQuantity(elements.prepQuantity.value),
+    note: cleanText(elements.prepNote.value),
+    createdAt: existingItem ? existingItem.createdAt : now,
+    updatedAt: now,
+  });
+
+  state.preparationItems = upsertPreparationItemInList(state.preparationItems, normalizedItem);
+  savePreparationItemsToStorage(state.preparationItems);
+  closeModal("prepForm");
+  renderPreparationUi();
+  if (state.ui.activeView !== "prep") {
+    switchMainView("prep");
+  }
+  showAppMessage(existingItem ? "準備項目を更新しました。" : "準備項目を追加しました。", "success");
+}
+
+function updatePreparationStatus(itemId, nextStatus) {
+  const item = findPreparationItemById(itemId);
+  if (!item) return;
+
+  const normalizedStatus = normalizePreparationStatus(nextStatus);
+  if (item.status === normalizedStatus) return;
+
+  const updatedItem = normalizePreparationItem({
+    ...item,
+    status: normalizedStatus,
+    updatedAt: new Date().toISOString(),
+  });
+
+  state.preparationItems = upsertPreparationItemInList(state.preparationItems, updatedItem);
+  savePreparationItemsToStorage(state.preparationItems);
+  renderPreparationUi();
+  showAppMessage(`「${item.itemName}」を ${getPreparationStatusLabel(normalizedStatus)} にしました。`, "success");
+}
+
+function deletePreparationItemById(itemId) {
+  const item = findPreparationItemById(itemId);
+  if (!item) return;
+
+  const confirmed = window.confirm(`「${item.itemName}」を削除しますか？ この操作は取り消せません。`);
+  if (!confirmed) return;
+
+  state.preparationItems = deletePreparationItemFromList(state.preparationItems, itemId);
+  savePreparationItemsToStorage(state.preparationItems);
+
+  if (state.editingPreparationItemId === itemId) {
+    state.editingPreparationItemId = null;
+    closeModal("prepForm");
+  }
+
+  renderPreparationUi();
+  showAppMessage("準備項目を削除しました。", "danger");
 }
 
 async function handleImportFromUrl() {
@@ -1347,9 +1829,11 @@ async function deletePropertyById(propertyId) {
 }
 
 function openModal(name) {
-  closeModal("detail");
-  closeModal("form");
-  closeModal("settings");
+  ["detail", "form", "settings", "prepForm"].forEach((modalName) => {
+    if (modalName !== name) {
+      closeModal(modalName);
+    }
+  });
 
   const modal = getModalElement(name);
   if (!modal) return;
@@ -1372,7 +1856,12 @@ function closeModal(name) {
     elements.formStatusMessage.textContent = "";
   }
 
-  const anyVisibleModal = [elements.detailModal, elements.formModal, elements.settingsModal].some(
+  if (name === "prepForm") {
+    state.editingPreparationItemId = null;
+    elements.prepFormStatusMessage.textContent = "";
+  }
+
+  const anyVisibleModal = [elements.detailModal, elements.formModal, elements.settingsModal, elements.prepFormModal].some(
     (item) => item && !item.classList.contains("hidden")
   );
 
@@ -1386,6 +1875,7 @@ function getModalElement(name) {
   if (name === "detail") return elements.detailModal;
   if (name === "form") return elements.formModal;
   if (name === "settings") return elements.settingsModal;
+  if (name === "prepForm") return elements.prepFormModal;
   return null;
 }
 
@@ -1505,6 +1995,56 @@ function compareNullableNumbers(valueA, valueB, direction) {
   }
 
   return safeA - safeB;
+}
+
+function getVisiblePreparationItems() {
+  return state.preparationItems
+    .filter(matchesPreparationFilter)
+    .sort(comparePreparationItemsByCurrentSort);
+}
+
+function matchesPreparationFilter(item) {
+  if (state.preparation.filter === "todo") return item.status === "todo";
+  if (state.preparation.filter === "doing") return item.status === "doing";
+  if (state.preparation.filter === "done") return item.status === "done";
+  if (state.preparation.filter === "keiichiRelated") {
+    return [item.ownerType, item.assignedTo, item.carryFrom].includes("keiichi");
+  }
+  if (state.preparation.filter === "honokaRelated") {
+    return [item.ownerType, item.assignedTo, item.carryFrom].includes("honoka");
+  }
+  if (state.preparation.filter === "buyOnly") return item.category === "buy";
+  if (state.preparation.filter === "carryOnly") return item.category === "carry";
+  return true;
+}
+
+function comparePreparationItemsByCurrentSort(itemA, itemB) {
+  if (state.preparation.sort === "updatedDesc") {
+    return new Date(itemB.updatedAt).getTime() - new Date(itemA.updatedAt).getTime();
+  }
+
+  if (state.preparation.sort === "unfinishedFirst") {
+    const orderDiff = getPreparationStatusOrder(itemA.status) - getPreparationStatusOrder(itemB.status);
+    if (orderDiff !== 0) return orderDiff;
+    return new Date(itemB.updatedAt).getTime() - new Date(itemA.updatedAt).getTime();
+  }
+
+  if (state.preparation.sort === "completedLast") {
+    const isDoneA = itemA.status === "done";
+    const isDoneB = itemB.status === "done";
+    if (isDoneA !== isDoneB) return isDoneA ? 1 : -1;
+    return new Date(itemB.updatedAt).getTime() - new Date(itemA.updatedAt).getTime();
+  }
+
+  if (state.preparation.sort === "nameAsc") {
+    return itemA.itemName.localeCompare(itemB.itemName, "ja");
+  }
+
+  return new Date(itemB.createdAt).getTime() - new Date(itemA.createdAt).getTime();
+}
+
+function getPreparationStatusOrder(status) {
+  return PREPARATION_STATUS_OPTIONS[status]?.order ?? 99;
 }
 
 function loadCurrentUserFromStorage() {
@@ -1776,6 +2316,50 @@ function savePropertiesToStorage(properties = state.properties) {
   writeStorage(STORAGE_KEYS.properties, JSON.stringify(properties));
 }
 
+function loadPreparationItemsFromStorage() {
+  const storedValue = readStorage(STORAGE_KEYS.preparationItems);
+
+  if (storedValue === null) {
+    const sampleItems = cloneSamplePreparationItems();
+    writeStorage(STORAGE_KEYS.preparationItems, JSON.stringify(sampleItems));
+    return sampleItems.map(normalizePreparationItem);
+  }
+
+  try {
+    const parsed = JSON.parse(storedValue);
+    if (!Array.isArray(parsed)) throw new Error("Array expected");
+    return parsed.map(normalizePreparationItem);
+  } catch (error) {
+    const fallbackItems = cloneSamplePreparationItems();
+    writeStorage(STORAGE_KEYS.preparationItems, JSON.stringify(fallbackItems));
+    showAppMessage("準備リストの読み込みに失敗したため、サンプルデータを再投入しました。", "warning");
+    return fallbackItems.map(normalizePreparationItem);
+  }
+}
+
+function savePreparationItemsToStorage(items = state.preparationItems) {
+  writeStorage(STORAGE_KEYS.preparationItems, JSON.stringify(items));
+}
+
+function upsertPreparationItemInList(list, item) {
+  const normalizedItem = normalizePreparationItem(item);
+  const nextList = list.map((currentItem) => normalizePreparationItem(currentItem));
+  const existingIndex = nextList.findIndex((currentItem) => currentItem.id === normalizedItem.id);
+
+  if (existingIndex >= 0) {
+    nextList.splice(existingIndex, 1, normalizedItem);
+    return nextList;
+  }
+
+  return [normalizedItem, ...nextList];
+}
+
+function deletePreparationItemFromList(list, itemId) {
+  return list
+    .filter((item) => item.id !== itemId)
+    .map((item) => normalizePreparationItem(item));
+}
+
 function readStorage(key) {
   try {
     return window.localStorage.getItem(key);
@@ -1882,6 +2466,10 @@ function cloneSampleProperties() {
   return JSON.parse(JSON.stringify(SAMPLE_PROPERTIES));
 }
 
+function cloneSamplePreparationItems() {
+  return JSON.parse(JSON.stringify(SAMPLE_PREPARATION_ITEMS));
+}
+
 function cloneReviews(reviews) {
   return JSON.parse(JSON.stringify(reviews || createEmptyReviews()));
 }
@@ -1915,6 +2503,45 @@ function normalizeRank(rank) {
   return ["S", "A", "B", "C"].includes(rank) ? rank : "";
 }
 
+function normalizePreparationCategory(category) {
+  return PREPARATION_CATEGORY_OPTIONS[category] ? category : "buy";
+}
+
+function normalizePreparationStatus(status) {
+  return PREPARATION_STATUS_OPTIONS[status] ? status : "todo";
+}
+
+function normalizePreparationOwnerType(ownerType) {
+  return PREPARATION_OWNER_OPTIONS[ownerType] ? ownerType : "common";
+}
+
+function normalizePreparationAssignee(userId) {
+  return PREPARATION_ASSIGNEE_OPTIONS[userId] ? userId : "undecided";
+}
+
+function normalizePreparationQuantity(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 1;
+  return Math.max(1, Math.round(parsed));
+}
+
+function normalizePreparationItem(item) {
+  const category = normalizePreparationCategory(item.category);
+  return {
+    id: cleanText(item.id) || createPreparationItemId(),
+    itemName: cleanText(item.itemName),
+    category,
+    ownerType: normalizePreparationOwnerType(item.ownerType),
+    carryFrom: category === "carry" ? normalizePreparationAssignee(item.carryFrom) : "undecided",
+    assignedTo: normalizePreparationAssignee(item.assignedTo),
+    status: normalizePreparationStatus(item.status),
+    quantity: normalizePreparationQuantity(item.quantity),
+    note: cleanText(item.note),
+    createdAt: cleanText(item.createdAt) || new Date().toISOString(),
+    updatedAt: cleanText(item.updatedAt) || cleanText(item.createdAt) || new Date().toISOString(),
+  };
+}
+
 function toNullableNumber(value) {
   if (value === null || value === undefined || value === "") return null;
   const parsed = Number(value);
@@ -1925,6 +2552,10 @@ function findPropertyById(propertyId) {
   return state.properties.find((property) => property.id === propertyId) || null;
 }
 
+function findPreparationItemById(itemId) {
+  return state.preparationItems.find((item) => item.id === itemId) || null;
+}
+
 function createPropertyId() {
   if (window.crypto && typeof window.crypto.randomUUID === "function") {
     return window.crypto.randomUUID();
@@ -1932,8 +2563,64 @@ function createPropertyId() {
   return `property-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function createPreparationItemId() {
+  if (window.crypto && typeof window.crypto.randomUUID === "function") {
+    return `prep-${window.crypto.randomUUID()}`;
+  }
+  return `prep-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 function getUserLabel(userId) {
   return USER_OPTIONS[userId]?.label || "未設定";
+}
+
+function getPreparationOwnerLabel(ownerType) {
+  if (ownerType === "common") return "共通で使うもの";
+  return `${PREPARATION_OWNER_OPTIONS[ownerType] || "未定"}のもの`;
+}
+
+function getPreparationCarryLabel(carryFrom) {
+  if (carryFrom === "keiichi" || carryFrom === "honoka") {
+    return `${PREPARATION_OWNER_OPTIONS[carryFrom]}が持参`;
+  }
+  return "持参者は未定";
+}
+
+function getPreparationAssignedLabel(assignedTo) {
+  return PREPARATION_ASSIGNEE_OPTIONS[assignedTo] || "未定";
+}
+
+function getPreparationStatusLabel(status) {
+  return PREPARATION_STATUS_OPTIONS[status]?.label || "未対応";
+}
+
+function getPreparationFilterLabel(filterName) {
+  const labels = {
+    all: "すべて",
+    todo: "未対応",
+    doing: "対応中",
+    done: "完了",
+    keiichiRelated: "けいいち関連",
+    honokaRelated: "ほのか関連",
+    buyOnly: "買うものだけ",
+    carryOnly: "持っていくものだけ",
+  };
+  return labels[filterName] || "すべて";
+}
+
+function getPreparationSortLabel(sortName) {
+  const labels = {
+    createdDesc: "新しい順",
+    updatedDesc: "更新が新しい順",
+    unfinishedFirst: "未対応を上にする",
+    completedLast: "完了を下にする",
+    nameAsc: "名前順",
+  };
+  return labels[sortName] || "新しい順";
+}
+
+function formatPreparationQuantity(value) {
+  return `${normalizePreparationQuantity(value)}個`;
 }
 
 function formatCurrency(value) {
