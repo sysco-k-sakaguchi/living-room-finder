@@ -916,27 +916,37 @@ function buildPropertyCardHtml(property) {
 
   return `
     <article class="property-card" data-property-id="${escapeHtml(property.id)}">
-      <div class="property-card-heading">
-        <h3 class="property-title">${escapeHtml(property.title)}</h3>
-        <p class="property-summary">
-          ${escapeHtml(formatCurrency(property.rent))} / ${escapeHtml(property.layout || "間取り未入力")}
-        </p>
+      <div class="property-card-main">
+        <div class="property-card-heading">
+          <h3 class="property-title" title="${escapeHtml(property.title)}">${escapeHtml(property.title)}</h3>
+          <p class="property-summary">
+            ${escapeHtml(formatCurrency(property.rent))} / ${escapeHtml(property.layout || "間取り未入力")}
+          </p>
+        </div>
+
+        <div class="card-meta-inline property-list-meta">
+          <span class="meta-inline-text">${escapeHtml(formatStation(property.station))}</span>
+          <span class="meta-inline-text">${escapeHtml(formatWalk(property.walkMinutes))}</span>
+          <span class="chip ${USER_OPTIONS[property.addedBy].chipClass}">${escapeHtml(getUserLabel(property.addedBy))}追加</span>
+        </div>
+
+        <div class="review-compact-strip">
+          ${orderedUsers.map((userId) => buildCompactReviewCard(property, userId)).join("")}
+        </div>
       </div>
 
-      <div class="card-meta-inline">
-        <span class="meta-inline-text">${escapeHtml(formatStation(property.station))}</span>
-        <span class="meta-inline-text">${escapeHtml(formatWalk(property.walkMinutes))}</span>
-        <span class="chip ${USER_OPTIONS[property.addedBy].chipClass}">${escapeHtml(getUserLabel(property.addedBy))}追加</span>
-      </div>
-
-      <div class="review-compact-strip">
-        ${orderedUsers.map((userId) => buildCompactReviewCard(property, userId)).join("")}
-      </div>
-
-      <div class="card-actions card-actions-compact">
+      <div class="property-card-actions-bar">
         <button type="button" class="secondary-button property-detail-button" data-action="open-detail" data-property-id="${escapeHtml(property.id)}">
-          詳細を見る
+          詳細
         </button>
+        <button type="button" class="secondary-button property-edit-button" data-action="edit-property" data-property-id="${escapeHtml(property.id)}">
+          編集
+        </button>
+        ${
+          property.url
+            ? `<a class="text-button property-source-link" href="${escapeHtml(property.url)}" target="_blank" rel="noreferrer">元URL</a>`
+            : ""
+        }
       </div>
     </article>
   `;
@@ -953,7 +963,7 @@ function buildCompactReviewCard(property, userId) {
 
   return `
     <div class="review-summary-card ${USER_OPTIONS[userId].reviewClass} ${isCurrentUser ? "review-pill-current" : ""}">
-      <span class="label">${escapeHtml(summaryLabel)}</span>
+      <span class="review-summary-label">${escapeHtml(summaryLabel)}</span>
       <span class="rank-chip ${getRankClassName(review.rank)}">${escapeHtml(review.rank || "未評価")}</span>
     </div>
   `;
